@@ -78,9 +78,12 @@
             }
             function pytha(b, maxlevel) {
                 if (maxlevel > 0) {
-                    draw(b);
-                    pytha(left(b), maxlevel - 1);
-                    pytha(right(b), maxlevel - 1);
+                    setTimeout(() => {
+                        draw(b);
+                        pytha(left(b), maxlevel - 1);
+                        pytha(right(b), maxlevel - 1);
+                        
+                    }, 1000/5);
                 }
             }
             pytha({
@@ -103,7 +106,7 @@
                     change()
                 }
             })
-            
+
             function change() {
                 let level = input.value
                 console.log(parseInt(level))
