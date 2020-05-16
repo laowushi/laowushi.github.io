@@ -1,0 +1,437 @@
+<html>
+    <head>
+        <meta charset='utf-8'>
+        <title>俄罗斯方块</title>
+        <style>
+            div.container {
+                position: absolute;
+                left: 30%;
+                top:10%
+            }
+
+            canvas#canvas {
+                border: 2px black solid;
+            }
+
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <canvas width="400" height="600" id="canvas"></canvas>
+        </div>
+        
+        <script>
+            "use strict";
+            // 俄罗斯方块游戏
+            // 创建matrix的函数。返回一个Matrix。
+            var make_matrix = function (w, h, dt) {
+                if (w * h != dt.length) {
+                    throw "w * h 应该等于 dt.length";
+                }
+                return {
+                    width: w,
+                    height: h,
+                    data: dt
+                };
+            };
+            var get_matrix_v = function (b, x, y) {
+                var i = y * (b.width) + x;
+                return b.data[i];
+            };
+            var get_matrix_col = function (b, x) {
+                var result = [];
+                for (var y = 0; y < b.height; y++) {
+                    result.push(get_matrix_v(b, x, y));
+                }
+                return result;
+            };
+            var get_matrix_row = function (b, y) {
+                var result = [];
+                for (var x = 0; x < b.width; x++) {
+                    result.push(get_matrix_v(b, x, y));
+                }
+                return result;
+            };
+            var rotate_matrix_90_anticlockwise = function (b) {
+                var dt = get_matrix_col(b, b.width - 1);
+                for (var x = b.width - 2; x >= 0; x--) {
+                    dt = dt.concat(get_matrix_col(b, x));
+                }
+                return {
+                    width: b.height,
+                    height: b.width,
+                    data: dt
+                };
+            };
+            var rotate_matrix_180 = function (b) {
+                return {
+                    width: b.width,
+                    height: b.height,
+                    data: b.data.reverse()
+                };
+            };
+            var make_block = function (offset, body) {
+                return {
+                    offset: offset,
+                    body: body
+                };
+            };
+            var new_random_block = function (offset) {
+                var rndint = Math.floor((Math.random() * 7)) % 7; // rndint in [0, 6]
+                switch (rndint) {
+                    case 0: return make_block(offset, make_matrix(2, 2, [2, 2, 2, 2]));
+                    case 1: return make_block(offset, make_matrix(2, 3, [
+                        1, 0,
+                        1, 0,
+                        1, 1
+                    ]));
+                    case 2: return make_block(offset, make_matrix(3, 2, [
+                        4, 4, 0,
+                        0, 4, 4
+                    ]));
+                    case 3: return make_block(offset, make_matrix(4, 1, [
+                        1, 2, 3, 4
+                    ]));
+                    case 4: return make_block(offset, make_matrix(2, 3, [
+                        0, 2,
+                        0, 2,
+                        2, 2
+                    ]));
+                    case 5: return make_block(offset, make_matrix(3, 2, [
+                        0, 3, 3,
+                        3, 3, 0
+                    ]));
+                    case 6: return make_block(offset, make_matrix(3, 2, [
+                        0, 1, 0,
+                        4, 4, 4
+                    ]));
+                    default: return make_block(offset, make_matrix(2, 2, [2, 3, 4, 5]));
+                }
+            };
+            // 1.从上到下，每次消除一行，并在第一行加入一行初始数据。
+            // 没有做是否应该消除的判断！！！ys里面的行号y必须是从小到大排序!!!
+            // 返回一个新board。
+            var remove_board_rows = function (b, ys) {
+                if (ys.length == 0) {
+                    return b;
+                }
+                // let ys1 = <number[]>ys.sort()
+                var data = zeros(b.width)
+                    .concat(b.data.slice(0, ys[0] * b.width))
+                    .concat(b.data.slice((ys[0] + 1) * b.width));
+                return remove_board_rows(make_matrix(b.width, b.height, data), ys.slice(1));
+            };
+            // 检查board上的每一行数，判断是否应该消除。如果全都不等于零，则应该消除。
+            // 返回应该消除的行的y坐标数组。 
+            var check_board_row = function (bd) {
+                var ys = [];
+                for (var y = 0; y < bd.height; y++) {
+                    var row = get_matrix_row(bd, y);
+                    if (row.every(function (v) { return v != 0; })) {
+                        ys.push(y);
+                    }
+                }
+                return ys;
+            };
+            var is_collide = function (bd, blk, side) {
+                var result = false;
+                var x_offset = 0;
+                var y_offset = 0;
+                switch (side) {
+                    case "upside":
+                        y_offset = -1;
+                        break;
+                    case "underside":
+                        y_offset = 1;
+                        break;
+                    case "leftside":
+                        x_offset = -1;
+                        break;
+                    case "rightside":
+                        x_offset = 1;
+                        break;
+                }
+                var bd_posx = blk.offset.x;
+                var bd_posy = blk.offset.y;
+                for (var blk_y = 0; blk_y < blk.body.height; blk_y++) {
+                    for (var blk_x = 0; blk_x < blk.body.width; blk_x++) {
+                        if (get_matrix_v(bd, bd_posx + blk_x + x_offset, bd_posy + blk_y + y_offset)
+                            * get_matrix_v(blk.body, blk_x, blk_y) != 0) {
+                            result = true;
+                        }
+                    }
+                }
+                return result;
+            };
+            var is_hit_bottom = function (bd, blk) {
+                if (blk.offset.y + blk.body.height == bd.height) {
+                    return true;
+                }
+                return false;
+            };
+            // 3. 把block放到board上，返回新的board。没有判断是否冲突！！！
+            var attach_block_to_board = function (bd, blk) {
+                var ndt = [];
+                for (var bd_y = 0; bd_y < bd.height; bd_y++) {
+                    for (var bd_x = 0; bd_x < bd.width; bd_x++) {
+                        var v = get_matrix_v(bd, bd_x, bd_y);
+                        if (bd_x >= blk.offset.x
+                            && bd_x < blk.offset.x + blk.body.width
+                            && bd_y >= blk.offset.y
+                            && bd_y < blk.offset.y + blk.body.height) {
+                            v = Math.max(get_matrix_v(bd, bd_x, bd_y), get_matrix_v(blk.body, bd_x - blk.offset.x, bd_y - blk.offset.y));
+                        }
+                        ndt.push(v);
+                    }
+                }
+                return {
+                    width: bd.width,
+                    height: bd.height,
+                    data: ndt
+                };
+            };
+            var render_board = function (canvas, layout, bd) {
+                var cw = canvas.width;
+                var ch = canvas.height;
+                var ctx = canvas.getContext("2d");
+                var bw = Math.floor(cw * layout.size.width / bd.width); // block里面小方块的宽
+                var bh = Math.floor(ch * layout.size.height / bd.height);
+                // let bh = bw
+                var bd_posx = (cw * layout.position.x); // board在canvas上的起始位置
+                var bd_posy = (ch * layout.position.y);
+                var bd_width = (cw * layout.size.width); //board在canvas上的宽
+                var bd_height = (ch * layout.size.height);
+                for (var y = 0; y < bd.height; y++) {
+                    for (var x = 0; x < bd.width; x++) {
+                        var v = get_matrix_v(bd, x, y);
+                        if (v == 0) {
+                            ctx.fillStyle = "white";
+                            ctx.fillRect(bd_posx + x * bw, bd_posy + y * bh, bw - 1, bh - 1);
+                        }
+                        else if (v < 0) {
+                            ctx.fillStyle = "grey";
+                            ctx.fillRect(bd_posx + x * bw, bd_posy + y * bh, bw - 1, bh - 1);
+                        }
+                        else if (v == 1) {
+                            ctx.fillStyle = "red";
+                            ctx.fillRect(bd_posx + x * bw, bd_posy + y * bh, bw - 1, bh - 1);
+                        }
+                        else if (v == 2) {
+                            ctx.fillStyle = "green";
+                            ctx.fillRect(bd_posx + x * bw, bd_posy + y * bh, bw - 1, bh - 1);
+                        }
+                        else if (v == 3) {
+                            ctx.fillStyle = "blue";
+                            ctx.fillRect(bd_posx + x * bw, bd_posy + y * bh, bw - 1, bh - 1);
+                        }
+                        else if (v == 4) {
+                            ctx.fillStyle = "purple";
+                            ctx.fillRect(bd_posx + x * bw, bd_posy + y * bh, bw - 1, bh - 1);
+                        }
+                        else if (v == 5) {
+                            ctx.fillStyle = "yellow";
+                            ctx.fillRect(bd_posx + x * bw, bd_posy + y * bh, bw - 1, bh - 1);
+                        }
+                        else {
+                            ctx.fillStyle = "black";
+                            ctx.fillRect(bd_posx + x * bw, bd_posy + y * bh, bw - 1, bh - 1);
+                        }
+                    }
+                }
+                // 画框框，围绕board
+                ctx.beginPath();
+                ctx.moveTo(bd_posx, bd_posy);
+                ctx.lineTo(bd_posx + bd_width, bd_posy);
+                ctx.lineTo(bd_posx + bd_width, bd_posy + bd_height);
+                ctx.lineTo(bd_posx, bd_posy + bd_height);
+                ctx.closePath();
+                // ctx.moveTo(bd_posx, bd_posy+bh*bd.height)
+                // ctx.lineTo(bd_posx + bw*bd.width, bd_posy + bh*bd.height)
+                ctx.stroke();
+            };
+            // render score 
+            var render_score = function (canvas, layout, score) {
+                var scr_posx = (layout.position.x * canvas.width);
+                var scr_posy = (layout.position.y * canvas.height);
+                var scr_width = (layout.size.width * canvas.width);
+                var scr_height = (layout.size.height * canvas.height);
+                var ctx = canvas.getContext("2d");
+                ctx.clearRect(scr_posx, scr_posy, scr_width, scr_height);
+                ctx.font = "15px serif";
+                ctx.fillStyle = "black";
+                ctx.fillText("SCORE:", scr_posx, scr_posy);
+                ctx.fillText(score.score.toString(), Math.floor(scr_posx + scr_width / 5), Math.floor(scr_posy + scr_height / 5));
+                ctx.fillText("LEVEL:", scr_posx, Math.floor(scr_posy + scr_height / 2));
+                ctx.fillText(score.level.toString(), Math.floor(scr_posx + scr_width / 5), Math.floor(scr_posy + scr_height / 10 * 7));
+            };
+            // 三、某一帧的状态。可变。如何优雅处理可变状态？
+            // state的核心方法：update/render
+            var State = /** @class */ (function () {
+                function State(bd, cvs) {
+                    var _this = this;
+                    this.score = 0;
+                    this.level = 1;
+                    this.gameOver = false;
+                    this.layouts = {
+                        // main board's layout
+                        board: {
+                            position: { x: 0.05, y: 0.025 },
+                            size: { width: 0.6, height: 0.8 }
+                        },
+                        // nextHero
+                        nextHreo: {
+                            position: { x: 0.72, y: 0.025 },
+                            size: { width: 0.2, height: 0.15 }
+                        },
+                        // score
+                        score: {
+                            position: { x: 0.72, y: 0.3 },
+                            size: { width: 0.23, height: 0.15 }
+                        },
+                    };
+                    this.board = bd;
+                    this.hero = new_random_block({ x: (this.board.width - 5), y: 0 });
+                    this.nextHero = new_random_block({ x: (this.board.width - 5), y: 0 });
+                    this.canvas = cvs;
+                    this.COOLDOWN = 180;
+                    this.cooldown = this.COOLDOWN;
+                    // event
+                    window.addEventListener("keydown", function (e) {
+                        switch (e.key) {
+                            case "ArrowLeft":
+                            case "A":
+                            case "a":
+                                if (_this.gameOver
+                                    || _this.hero.offset.x <= 0
+                                    || is_collide(_this.board, _this.hero, "leftside")) {
+                                    return;
+                                }
+                                _this.move_hero("left", 1);
+                                break;
+                            case "ArrowRight":
+                            case "D":
+                            case "d":
+                                if (_this.gameOver
+                                    || _this.hero.offset.x + _this.hero.body.width >= _this.board.width
+                                    || is_collide(_this.board, _this.hero, "rightside")) {
+                                    return;
+                                }
+                                _this.move_hero("right", 1);
+                                break;
+                            case "ArrowUp":
+                            case "W":
+                            case "w":
+                                if (_this.gameOver) {
+                                    return;
+                                }
+                                _this.rotate_hero();
+                                break;
+                            case "ArrowDown":
+                            case " ":
+                            case "S":
+                            case "s":
+                                _this.cooldown = _this.COOLDOWN + _this.board.height - _this.hero.body.height;
+                                break;
+                        }
+                    });
+                }
+                State.prototype.move_hero = function (dir, spd) {
+                    switch (dir) {
+                        case "up":
+                            this.hero.offset.y -= spd;
+                            break;
+                        case "down":
+                            this.hero.offset.y += spd;
+                            break;
+                        case "left":
+                            this.hero.offset.x -= spd;
+                            break;
+                        case "right":
+                            this.hero.offset.x += spd;
+                            break;
+                    }
+                };
+                State.prototype.rotate_hero = function () {
+                    this.hero.body = rotate_matrix_90_anticlockwise(this.hero.body);
+                };
+                State.prototype.check_gameover = function () {
+                    for (var y = 0; y < this.hero.body.height; y++) {
+                        for (var x = 0; x < this.hero.body.width; x++) {
+                            if (get_matrix_v(this.board, this.hero.offset.x + x, this.hero.offset.y + y)
+                                * (get_matrix_v(this.hero.body, x, y)) != 0) {
+                                this.gameOver = true;
+                                var dead_board = attach_block_to_board(this.board, this.hero);
+                                this.hero = make_block(this.hero.offset, make_matrix(this.hero.body.width, this.hero.body.height, this.hero.body.data.map(function (v) { return v * (-1); })));
+                                this.board = make_matrix(dead_board.width, dead_board.height, dead_board.data.map(function (v) { return v * (-1); }));
+                                return;
+                            }
+                        }
+                    }
+                };
+                State.prototype.level_up = function () {
+                    if (Math.floor(this.score / 4000) > this.level) {
+                        this.level += 1;
+                        this.COOLDOWN = this.COOLDOWN * 0.8;
+                        this.cooldown = this.COOLDOWN;
+                    }
+                };
+                State.prototype.update = function () {
+                    if (this.gameOver == true) {
+                        return;
+                    }
+                    var ys = check_board_row(this.board);
+                    if (ys.length > 0) {
+                        this.board = remove_board_rows(this.board, ys.sort());
+                        this.score += (100 * ys.length * ys.length);
+                        this.level_up();
+                    }
+                    if (is_hit_bottom(this.board, this.hero) || is_collide(this.board, this.hero, "underside")) {
+                        this.cooldown = this.COOLDOWN;
+                        this.board = attach_block_to_board(this.board, this.hero);
+                        this.hero = this.nextHero;
+                        this.nextHero = new_random_block({ x: this.board.width - 5, y: 0 });
+                    }
+                    this.cooldown -= 1;
+                    if (this.cooldown <= 0) {
+                        this.cooldown = this.COOLDOWN;
+                    }
+                    if (this.cooldown >= this.COOLDOWN) {
+                        this.move_hero("down", 1);
+                    }
+                    this.check_gameover();
+                };
+                State.prototype.render = function () {
+                    render_board(this.canvas, this.layouts.board, attach_block_to_board(this.board, this.hero));
+                    // nextHero and score
+                    render_board(this.canvas, this.layouts.nextHreo, attach_block_to_board({ width: 7, height: 7, data: zeros(7 * 7) }, { offset: { x: 2, y: 2 }, body: this.nextHero.body }));
+                    render_score(this.canvas, this.layouts.score, { score: this.score, level: this.level });
+                };
+                return State;
+            }());
+            // 四、工具杂项
+            var zeros = function (n) {
+                if (n < 1) {
+                    return [];
+                }
+                else {
+                    return [0].concat(zeros(n - 1));
+                }
+            };
+            // 主函数
+            function main() {
+                var canvas = document.getElementById("canvas");
+                var w = 10;
+                var h = 20;
+                var fps = 100;
+                var board = make_matrix(w, h, zeros(w * h));
+                var state = new State(board, canvas);
+                setInterval(function () {
+                    state.update();
+                    state.render();
+                }, 1000 / fps);
+            }
+            main();
+
+        </script>
+    </body>
+</html>
