@@ -6,11 +6,16 @@
             div.container {
                 position: absolute;
                 left: 30%;
-                top:10%
+                top:5%
             }
 
             canvas#canvas {
                 border: 2px black solid;
+            }
+
+            #sourcecode {
+                position: absolute;
+                right: 1%;
             }
 
         </style>
@@ -19,6 +24,9 @@
         <div class="container">
             <canvas width="400" height="600" id="canvas"></canvas>
         </div>
+        <p id="sourcecode">
+            <a href="https://gitee.com/ddaren/tetris" target="_blank">Source Code</a>
+        </p>
         
         <script>
             "use strict";
