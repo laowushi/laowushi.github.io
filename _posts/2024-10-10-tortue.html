@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8">
+        <title>Tortue Move</title>
+        <style>
+            #canvas {
+                border:1px black solid;
+                position: absolute;
+                left:10%;
+            }
+            
+            #btnup{
+                position: relative;
+            }
+            #btndown{
+                position: relative;
+            }
+            #btnleft{
+                position: relative;
+            }
+            #btnright{
+                position: relative;
+            }
+            #btnclean{
+                position: relative;
+            }
+
+            #input{
+                position: absolute;
+                right: 10%;
+            }
+            #btngo{
+                position: relative;
+                /* top:70%; */
+            }
+        </style>
+    </head>
+    <body>
+      <p id="input">
+        steps: <textarea id="input" cols="40" rows="22" ></textarea>
+        <button id="btngo" onclick="go()">Go</button>
+        <button id="btnup" onclick="move_up(10)">Up</button>
+        <button id="btndown" onclick="move_down(10)">Down</button>
+        <button id="btnleft" onclick="move_left(10)">Left</button>
+        <button id="btnright" onclick="move_right(10)">Right</button>
+        <button id="btnclean" onclick="clean()">Clean</button>
+      </p>
+      <canvas id="canvas" width="800" height="800"></canvas>
+        <script type="text/javascript">
+          var canvas = document.getElementById("canvas");
+          var ctx = canvas.getContext("2d");
+          var x=400; var y=400;
+          
+          const move_left = (distance)=>{
+              let newx = x - distance;
+              ctx.beginPath();
+              ctx.moveTo(x, y);
+              ctx.lineTo(newx, y);
+              ctx.strokeStyle = "red";
+              ctx.stroke();
+              x=newx;
+          }
+          
+          const move_right = (distance)=>{
+              let newx = x + distance;
+              ctx.beginPath();
+              ctx.moveTo(x, y);
+              ctx.lineTo(newx, y);
+              ctx.strokeStyle = "red";
+              ctx.stroke();
+              x=newx;
+          }
+
+          const move_up = (distance)=>{
+              let newy = y - distance;
+              ctx.beginPath();
+              ctx.moveTo(x, y);
+              ctx.lineTo(x, newy);
+              ctx.strokeStyle = "red";
+              ctx.stroke();
+              y=newy;
+          }          
+          
+          const move_down = (distance)=>{
+              let newy = y + distance;
+              ctx.beginPath();
+              ctx.moveTo(x, y);
+              ctx.lineTo(x, newy);
+              ctx.strokeStyle = "red";
+              ctx.stroke();
+              y=newy;
+          }
+
+          function clean(){
+              ctx.clearRect(0, 0, canvas.width, canvas.height);
+              x=400;
+              y=400;
+          }
+          
+          function go() {
+              move_left(50);
+              move_up(50);
+              move_right(10);
+              move_down(10);
+          }
+          
+
+          function draw_tortue() {
+              ctx.beginPath();
+              ctx.moveTo(75, 50);
+              ctx.lineTo(100, 75);
+              ctx.lineTo(100, 25);
+              ctx.fillStyle = "green";
+              ctx.fill();
+          }
+
+          window.addEventListener("keydown", function (e){
+              switch (e.key){
+              case "ArrowLeft":
+                  move_left(10);
+                  break;
+                  
+              case "ArrowRight":
+                  move_right(10);
+                  break;
+                  
+              case "ArrowUp":
+                  move_up(10);
+                  break;
+                  
+              case "ArrowDown":
+                  move_down(10);
+                  break;
+                  
+              }
+          });
+
+        </script>
+      
+    </body>
+</html>
