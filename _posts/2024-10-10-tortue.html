@@ -50,10 +50,11 @@
         <script type="text/javascript">
           var canvas = document.getElementById("canvas");
           var ctx = canvas.getContext("2d");
-          var x=400; var y=400;
+          var x=canvas.width/2; var y=canvas.height/2;
           
-          const move_left = (distance)=>{
+          function move_left(distance) {
               let newx = x - distance;
+              if (newx < 0) { newx = canvas.width; x=newx; }
               ctx.beginPath();
               ctx.moveTo(x, y);
               ctx.lineTo(newx, y);
@@ -64,6 +65,7 @@
           
           const move_right = (distance)=>{
               let newx = x + distance;
+              if (newx > canvas.width) { newx = 0; x=newx; }
               ctx.beginPath();
               ctx.moveTo(x, y);
               ctx.lineTo(newx, y);
@@ -74,6 +76,7 @@
 
           const move_up = (distance)=>{
               let newy = y - distance;
+              if (newy < 0) { newy = canvas.height; y=newy;}
               ctx.beginPath();
               ctx.moveTo(x, y);
               ctx.lineTo(x, newy);
@@ -84,6 +87,8 @@
           
           const move_down = (distance)=>{
               let newy = y + distance;
+              if (newy > canvas.height) { newy = 0; y=newy;}
+              
               ctx.beginPath();
               ctx.moveTo(x, y);
               ctx.lineTo(x, newy);
@@ -94,8 +99,8 @@
 
           function clean(){
               ctx.clearRect(0, 0, canvas.width, canvas.height);
-              x=400;
-              y=400;
+              x=canvas.width/2;
+              y=canvas.height/2;
           }
           
           function go() {
