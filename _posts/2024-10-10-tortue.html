@@ -25,12 +25,31 @@
                 right:10%;
                 bottom:-10%;
             }
+            #example{
+                position: absolute;
+                right:15%;
+                bottom:5%;
+            }
+ 
         </style>
     </head>
     <body>
       <p id="input">
         <textarea id="textarea" cols="40" rows="22" placeholder="input commands here. eg: `move_left(10);` Valid commands: `move_left(N);` `move_right(N);` `move_up(N);` `move_down(N);` `clean();`"></textarea>
         <button id="btngo" onclick="go()">Go</button>
+      </p>
+      <p id="example">
+      example:<br>
+      <code>let square=(n,step)=>{<br>
+	      if (n > 800- 4*step){return;}<br>
+	        move_left(n);<br>
+	        move_up(n+step);<br>
+	        move_right(n+2*step);<br>
+	        move_down(n+3*step);<br>
+	        square(n+4*step,step);<br>
+	      }<br>
+
+	      square(0,5);<br></code>
       </p>
         <canvas id="canvas" width="800" height="800"></canvas>
       <div class="directions">
