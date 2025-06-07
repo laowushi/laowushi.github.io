@@ -1,0 +1,4160 @@
+<!doctype html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style type="text/css">
+      .container {
+        display: flex;
+        width: 100%;
+        height: 100%;
+        gap: 4px;
+        box-sizing: border-box;
+      }
+
+      .textarea-container {
+        flex: 1 1 50%;
+        box-sizing: border-box;
+        <!-- padding: 1px; -->
+      }
+
+      textarea {
+        width: 100%;
+        height: 100%;
+        box-sizing: border-box;
+        border: 1px solid #ccc;
+        resize: both;
+      }
+    </style>
+
+    <title></title>
+  </head>
+
+  <body>
+    <!-- <script type="text/javascript" src="jscc.js"></script> -->
+    <script type="text/javascript">
+      //////////////////
+      // part 0 utils //
+      //////////////////
+      function myassert(b, msg = "") {
+        if (!b) {
+          throw new Error(msg);
+        }
+      }
+
+      const None = Symbol("None");
+
+      function error_at(src, pos = 0, line_no = 1, filename = "", msg) {
+        var start = pos;
+        var end = pos + 1;
+        while (start > 0 && src[start - 1] != "\n") start--;
+        while (end < src.length && src[end] != "\n") end++;
+
+        let errsrc = String(`${filename}:${line_no}: ${src.slice(start, end)}`);
+        let indentlen = String(`${filename}:${line_no}: `).length + pos - start;
+        var indentstr = "";
+        for (let i = 0; i < indentlen; i++) {
+          indentstr = "~" + indentstr;
+        }
+        return String(`\n${errsrc}\n${indentstr}^${msg}`);
+      }
+
+      function error_token(tok, msg) {
+        return error_at(tok.src, tok.pos, tok.line_no, tok.filename, msg);
+      }
+
+      class Counter {
+        static number = 0;
+        constructor(n = 0) {
+          this.number = n;
+        }
+
+        static counts() {
+          this.number += 1;
+          return this.number;
+        }
+
+        static reset(n = 0) {
+          this.number = n;
+        }
+      }
+
+      function uniq_str(nm = ".L") {
+        let COUNT = Counter.counts();
+        return String(`${nm}${COUNT}`);
+      }
+
+      //////////////////
+      // part 1 lexer //
+      //////////////////
+
+      // TOKEN KIND
+      class TokenKind {
+        static TK_END = Symbol("TK_END");
+        static TK_INT = Symbol("TK_INT"); // INTEGER NUMBER
+        static TK_KW_VOID = Symbol("TK_KW_VOID"); // "char"
+        static TK_KW_CHAR = Symbol("TK_KW_CHAR"); // "char"
+        static TK_KW_INT = Symbol("TK_KW_INT"); // "int"
+        static TK_KW_LONG = Symbol("TK_KW_LONG"); // "long"
+        static TK_KW_IF = Symbol("TK_KW_IF"); // "if"
+        static TK_KW_ELSE = Symbol("TK_KW_ELSE"); // "else"
+        static TK_KW_FOR = Symbol("TK_KW_FOR"); // "for"
+        static TK_KW_WHILE = Symbol("TK_KW_WHILE"); // "while"
+        static TK_KW_BREAK = Symbol("TK_KW_BREAK"); // "break"
+        static TK_KW_CONTINUE = Symbol("TK_KW_CONTINUE"); // "continue"
+        static TK_KW_RETURN = Symbol("TK_KW_RETURN"); // "return"
+        static TK_KW_STRUCT = Symbol("TK_KW_STRUCT"); // "struct"
+        static TK_KW_UNION = Symbol("TK_KW_UNION"); // "union"
+        static TK_KW_TYPEDEF = Symbol("TK_KW_TYPEDEF"); // "typedef"
+        static TK_KW_SIZEOF = Symbol("TK_KW_SIZEOF"); // "sizeof"
+        static TK_IDENT = Symbol("TK_IDENT");
+        static TK_STR = Symbol("TK_STR");
+        static TK_PLUS = Symbol("+");
+        static TK_MINUS = Symbol("-");
+        static TK_ASTERISK = Symbol("*");
+        static TK_SLASH = Symbol("/");
+        static TK_LPAREN = Symbol("(");
+        static TK_RPAREN = Symbol(")");
+        static TK_LBRAK = Symbol("[");
+        static TK_RBRAK = Symbol("]");
+        static TK_LBRACE = Symbol("{");
+        static TK_RBRACE = Symbol("}");
+        static TK_GT = Symbol(">");
+        static TK_LT = Symbol("<");
+        static TK_GE = Symbol(">=");
+        static TK_LE = Symbol("<=");
+        static TK_ASSIGN = Symbol("=");
+        static TK_EQ = Symbol("==");
+        static TK_BANG = Symbol("!");
+        static TK_NE = Symbol("!=");
+        static TK_COLON = Symbol(":");
+        static TK_COND = Symbol("?");
+        static TK_LOGAND = Symbol("&&");
+        static TK_LOGOR = Symbol("||");
+        static TK_BITOR = Symbol("|");
+        static TK_BITAND = Symbol("&");
+        static TK_SEMICOLON = Symbol(";");
+        static TK_COMMA = Symbol(",");
+        static TK_DOT = Symbol(".");
+        static TK_THIN_RIGHT_ARROW = Symbol("->");
+        static TK_MOD = Symbol("%");
+      }
+
+      class Token {
+        constructor(kind, val, pos = 0, line_no = 1, src = "", filename = "") {
+          this.kind = kind;
+          this.val = val || 0;
+          this.pos = pos;
+          this.line_no = line_no;
+          this.src = src;
+          this.filename = filename;
+        }
+
+        clone() {
+          return new Token(
+            this.kind,
+            this.val,
+            this.pos,
+            this.line_no,
+            this.src,
+            this.filename,
+          );
+        }
+      }
+
+      function is_letter(c) {
+        return ("a" <= c && c <= "z") || ("A" <= c && c <= "Z") || c == "_";
+      }
+
+      function is_digit(c) {
+        return "0" <= c && c <= "9";
+      }
+
+      function is_whitespace(c) {
+        return c == " " || c == "\r" || c == "\t";
+      }
+
+      class Lexer {
+        constructor(src, filename = "") {
+          if (src == "" || src == None) {
+            throw new Error("no input src.");
+          }
+          this.src = src;
+          this.pos = 0;
+          this.filename = filename;
+          this.line_no = 1;
+        }
+
+        next() {
+          if (this.pos >= this.src.length) {
+            return new Token(
+              TokenKind.TK_END,
+              0,
+              this.pos - 1,
+              this.line_no,
+              this.src,
+              this.filename,
+            );
+          }
+
+          let c = this.src[this.pos];
+
+          if (is_whitespace(c)) {
+            this.pos += 1;
+            while (is_whitespace(this.ch())) this.pos += 1;
+            return this.next();
+          }
+
+          if (c == "\n") {
+            this.pos += 1;
+            this.line_no += 1;
+            return this.next();
+          }
+
+          if (is_letter(c)) return this.read_ident();
+          if (is_digit(c)) return this.read_num();
+          if (c == '"') return this.read_string();
+          if (c == "'") return this.read_char();
+
+          return this.read_punct();
+        }
+
+        read_char() {
+          const pos = this.pos;
+          this.pos += 1;
+          let chcode = this.ch().charCodeAt(0);
+          this.pos += 1;
+          if (this.ch() != "'") {
+            throw new Error(
+              error_at(
+                this.src,
+                this.pos - 1,
+                this.line_no,
+                this.filename,
+                "unclosed character literal",
+              ),
+            );
+          }
+          this.pos += 1;
+          return new Token(
+            TokenKind.TK_INT,
+            chcode,
+            pos,
+            this.line_no,
+            this.src,
+            this.filename,
+          );
+        }
+
+        read_ident() {
+          let start = this.pos;
+          this.pos += 1;
+          var c = this.ch();
+          while ((is_letter(c) || is_digit(c)) && this.pos < this.src.length) {
+            this.pos += 1;
+            c = this.ch();
+          }
+
+          let id = this.src.slice(start, this.pos);
+          let kind = lookup_keyword(id);
+
+          return new Token(
+            kind,
+            id,
+            start,
+            this.line_no,
+            this.src,
+            this.filename,
+          );
+        }
+
+        read_num() {
+          let start = this.pos;
+          this.pos += 1;
+          while (is_digit(this.ch()) && this.pos < this.src.length) {
+            this.pos += 1;
+          }
+
+          let i = this.src.slice(start, this.pos);
+          return new Token(
+            TokenKind.TK_INT,
+            i,
+            start,
+            this.line_no,
+            this.src,
+            this.filename,
+          );
+        }
+
+        read_punct() {
+          let start = this.pos;
+          let c = this.src[this.pos];
+          this.pos += 1;
+          var t;
+          switch (c) {
+            case "+":
+              t = TokenKind.TK_PLUS;
+              break;
+            case "-":
+              if (this.ch() == ">") {
+                t = TokenKind.TK_THIN_RIGHT_ARROW;
+                c = "->";
+                this.pos += 1;
+              } else {
+                t = TokenKind.TK_MINUS;
+              }
+              break;
+            case "*":
+              t = TokenKind.TK_ASTERISK;
+              break;
+            case "/":
+              t = TokenKind.TK_SLASH;
+              break;
+            case "(":
+              t = TokenKind.TK_LPAREN;
+              break;
+            case ")":
+              t = TokenKind.TK_RPAREN;
+              break;
+            case "[":
+              t = TokenKind.TK_LBRAK;
+              break;
+            case "]":
+              t = TokenKind.TK_RBRAK;
+              break;
+            case "{":
+              t = TokenKind.TK_LBRACE;
+              break;
+            case "}":
+              t = TokenKind.TK_RBRACE;
+              break;
+            case ">":
+              if (this.ch() == "=") {
+                t = TokenKind.TK_GE;
+                c = ">=";
+                this.pos += 1;
+              } else {
+                t = TokenKind.TK_GT;
+              }
+              break;
+
+            case "<":
+              if (this.ch() == "=") {
+                t = TokenKind.TK_LE;
+                c = "<=";
+                this.pos += 1;
+              } else {
+                t = TokenKind.TK_LT;
+              }
+              break;
+
+            case "=":
+              if (this.ch() == "=") {
+                t = TokenKind.TK_EQ;
+                c = "==";
+                this.pos += 1;
+              } else {
+                t = TokenKind.TK_ASSIGN;
+              }
+              break;
+
+            case "!":
+              if (this.ch() == "=") {
+                t = TokenKind.TK_NE;
+                c = "!=";
+                this.pos += 1;
+              } else {
+                t = TokenKind.TK_BANG;
+              }
+              break;
+
+            case "&":
+              if (this.ch() == "&") {
+                t = TokenKind.TK_LOGAND;
+                c = "&&";
+                this.pos += 1;
+              } else {
+                t = TokenKind.TK_BITAND;
+              }
+              break;
+
+            case "|":
+              if (this.ch() == "|") {
+                t = TokenKind.TK_LOGOR;
+                c = "||";
+                this.pos += 1;
+              } else {
+                t = TokenKind.TK_BITOR;
+              }
+              break;
+
+            case ":":
+              t = TokenKind.TK_COLON;
+              break;
+
+            case "?":
+              t = TokenKind.TK_COND;
+              break;
+
+            case ";":
+              t = TokenKind.TK_SEMICOLON;
+              break;
+
+            case ",":
+              t = TokenKind.TK_COMMA;
+              break;
+
+            case ".":
+              t = TokenKind.TK_DOT;
+              break;
+
+            case "%":
+              t = TokenKind.TK_MOD;
+              break;
+
+            default:
+              let msg = error_at(
+                this.src,
+                this.pos,
+                this.line_no,
+                "",
+                `ERROR LEX: Unknown punct ${c}`,
+              );
+              throw new Error(msg);
+          }
+
+          return new Token(t, c, start, this.line_no, this.src, this.filename);
+        }
+
+        read_string() {
+          this.pos += 1;
+          const start = this.pos;
+          let c;
+          while (true) {
+            c = this.ch();
+            if (c == '"') {
+              break;
+            }
+
+            if (this.pos >= this.src.length) {
+              throw new Error(
+                error_at(
+                  this.src,
+                  this.pos - 1,
+                  this.line_no,
+                  this.filename,
+                  "unclosed string literal",
+                ),
+              );
+            }
+
+            if (c == "\\") {
+              this.pos += 1;
+            }
+
+            this.pos += 1;
+          }
+
+          const str = this.src.slice(start, this.pos);
+          this.pos += 1; // skip "
+          return new Token(
+            TokenKind.TK_STR,
+            str,
+            start,
+            this.line_no,
+            this.src,
+            this.filename,
+          );
+        }
+
+        ch() {
+          return this.src[this.pos];
+        }
+      }
+
+      function lookup_keyword(ident) {
+        const kws = new Map([
+          ["void", TokenKind.TK_KW_VOID],
+          ["char", TokenKind.TK_KW_CHAR],
+          ["int", TokenKind.TK_KW_INT],
+          ["long", TokenKind.TK_KW_LONG],
+          ["if", TokenKind.TK_KW_IF],
+          ["else", TokenKind.TK_KW_ELSE],
+          ["for", TokenKind.TK_KW_FOR],
+          ["while", TokenKind.TK_KW_WHILE],
+          ["break", TokenKind.TK_KW_BREAK],
+          ["continue", TokenKind.TK_KW_CONTINUE],
+          ["return", TokenKind.TK_KW_RETURN],
+          ["struct", TokenKind.TK_KW_STRUCT],
+          ["union", TokenKind.TK_KW_UNION],
+          ["typedef", TokenKind.TK_KW_TYPEDEF],
+          ["sizeof", TokenKind.TK_KW_SIZEOF],
+        ]);
+
+        let k = kws.get(ident);
+        if (k == undefined) return TokenKind.TK_IDENT;
+        return k;
+      }
+
+      ///////////////////
+      // part 2 parser //
+      ///////////////////
+      class TypeKind {
+        static TY_VOID = Symbol("TY_VOID");
+        static TY_CHAR = Symbol("TY_CHAR");
+        static TY_INT = Symbol("TY_INT");
+        static TY_LONG = Symbol("TY_LONG");
+        static TY_PTR = Symbol("TY_PTR");
+        static TY_FUNC = Symbol("TY_FUNC");
+        static TY_ARRAY = Symbol("TY_ARRAY");
+        static TY_STRUCT = Symbol("TY_STRUCT");
+        static TY_UNION = Symbol("TY_UNION");
+      }
+
+      class Type {
+        constructor(kind, size = 8, align = 8, base = None, name = None) {
+          this.kind = kind;
+          this.base = base; // base Type
+          this.size = size;
+          this.align = align;
+          this.name = name; // Token
+          this.func = undefined; // {ret_ty, param}
+          this.array_len = -1;
+          this.struct_fields = undefined; // [Node];
+          this.struct_tag = undefined; // Token
+        }
+
+        set_name(name) {
+          this.name = name;
+          return this;
+        }
+
+        to_str() {
+          switch (this.kind) {
+            case TypeKind.TY_CHAR:
+              return "char";
+            case TypeKind.TY_INT:
+              return "int";
+            case TypeKind.TY_LONG:
+              return "long";
+            case TypeKind.TY_STRUCT:
+            case TypeKind.TY_UNION:
+              return this.struct_tag.val;
+            case TypeKind.TY_ARRAY:
+            case TypeKind.TY_PTR:
+              return String(`${this.base.to_str()} *`);
+            case TypeKind.TY_FUNC:
+              const ret = this.func.ret_ty.to_str();
+              const pa = this.func.param.map((p) => {
+                return pa.to_str();
+              });
+              return [ret, this.func.name.val, pa];
+            case TypeKind.TY_VOID:
+              return "void";
+          }
+        }
+
+        eq(that) {
+          if (that == None) return false;
+          if (this.kind != that.kind) return false;
+
+          if (this.base != None) {
+            return this.base.eq(that.base);
+          }
+
+          if (this.base == None && that.base != None) return false;
+
+          if (this.func != undefined) {
+            if (!this.func.ret_ty.eq(that.func.ret_ty)) return false;
+
+            for (let i = 0; i < this.func.param.length; i++) {
+              const thisp = this.func.param[i];
+              const thatp = that.func.param[i];
+              if (!thisp.eq(thatp)) return false;
+            }
+          }
+
+          if (this.func == undefined && that.func != undefined) return false;
+
+          // todo! struct
+
+          return true;
+        }
+
+        clone() {
+          let ty = new Type(
+            this.kind,
+            this.size,
+            this.align,
+            this.base,
+            this.name,
+          );
+          ty.func = this.func;
+          ty.array_len = this.array_len;
+          ty.struct_fields = this.struct_fields;
+          ty.struct_tag = this.struct_tag;
+          return ty;
+        }
+
+        to_pointer() {
+          return new Type(TypeKind.TY_PTR, 8, 8, this, None);
+        }
+
+        is_integer() {
+          if (
+            this.kind == TypeKind.TY_INT ||
+            this.kind == TypeKind.TY_LONG ||
+            this.kind == TypeKind.TY_CHAR
+          )
+            return true;
+
+          return false;
+        }
+
+        static array_of(ty, len) {
+          let arrty = new Type(
+            TypeKind.TY_ARRAY,
+            Number(len) * ty.size,
+            ty.align,
+            ty,
+            ty.name,
+          );
+          arrty.array_len = len;
+          return arrty;
+        }
+      }
+
+      const int_ty = new Type(TypeKind.TY_INT, 4, 4);
+      const long_ty = new Type(TypeKind.TY_LONG, 8, 8);
+      const char_ty = new Type(TypeKind.TY_CHAR, 1, 1);
+      const void_ty = new Type(TypeKind.TY_VOID, 1, 1);
+
+      function common_type(lhsty, rhsty) {
+        return lhsty.size >= rhsty.size ? lhsty : rhsty;
+      }
+
+      class NodeKind {
+        static ND_INT = Symbol("ND_INT");
+        static ND_ADD = Symbol("ND_ADD");
+        static ND_SUB = Symbol("ND_SUB");
+        static ND_MUL = Symbol("ND_MUL");
+        static ND_DIV = Symbol("ND_DIV");
+        static ND_MOD = Symbol("ND_MOD");
+        static ND_LT = Symbol("ND_LT");
+        static ND_GT = Symbol("ND_GT");
+        static ND_LE = Symbol("ND_LE");
+        static ND_GE = Symbol("ND_GE");
+        static ND_EQ = Symbol("ND_EQ");
+        static ND_NE = Symbol("ND_NE");
+        static ND_ASSIGN = Symbol("ND_ASSIGN");
+        static ND_LOGOR = Symbol("ND_LOGOR");
+        static ND_LOGAND = Symbol("ND_LOGAND");
+        static ND_CONDITIONAL = Symbol("ND_CONDITIONAL");
+        static ND_DEREF = Symbol("ND_DEREF");
+        static ND_ADDR = Symbol("ND_ADDR");
+        static ND_VAR = Symbol("ND_VAR");
+        static ND_FUNCALL = Symbol("ND_FUNCALL");
+        static ND_NEG = Symbol("ND_NEG");
+        static ND_NOT = Symbol("ND_NOT");
+        static ND_FUNC = Symbol("ND_FUNC");
+        static ND_BLOCK = Symbol("ND_BLOCK");
+        static ND_IF = Symbol("ND_IF");
+        static ND_FOR = Symbol("ND_FOR");
+        static ND_BREAK = Symbol("ND_BREAK");
+        static ND_RETURN = Symbol("ND_RETURN");
+        static ND_STRUCT_REF = Symbol("ND_STRUCT_REF");
+        static ND_CONTINUE = Symbol("ND_CONTINUE");
+        static ND_EXPR_STMT = Symbol("ND_EXPR_STMT");
+      }
+
+      class Node {
+        constructor(kind, data = None, loc, ty = None) {
+          this.kind = kind;
+          this.data = data; // func body or others
+          this.loc = loc; // Token
+          this.type = ty;
+        }
+      }
+
+      function new_int_node(i, loc) {
+        return new Node(NodeKind.ND_INT, i, loc, int_ty);
+      }
+
+      function new_long_node(i, loc) {
+        return new Node(NodeKind.ND_INT, i, loc, long_ty);
+      }
+
+      function new_binary_node(kind, lhs, rhs, loc) {
+        return new Node(kind, [lhs, rhs], loc, common_type(lhs.type, rhs.type));
+      }
+
+      class SymbolTable {
+        constructor(out = None) {
+          this.out = out;
+          this.store = new Map();
+        }
+
+        define(namestr, sym) {
+          if (this.store.has(namestr)) {
+            return false;
+          }
+          this.store.set(namestr, sym);
+          return true;
+        }
+
+        resolve(namestr) {
+          let v = this.store.get(namestr);
+          if (v == undefined) {
+            if (this.out == None) {
+              return None;
+            }
+            return this.out.resolve(namestr);
+          }
+
+          return v;
+        }
+      }
+
+      function align_to(base, alg) {
+        return Math.floor((base + alg - 1) / alg) * alg;
+      }
+
+      // return integer
+      function eval_const_expr(nd) {
+        switch (nd.kind) {
+          case NodeKind.ND_INT:
+            return nd.data;
+          case NodeKind.ND_ADD:
+            return eval_const_expr(nd.data[0]) + eval_const_expr(nd.data[1]);
+          case NodeKind.ND_SUB:
+            return eval_const_expr(nd.data[0]) - eval_const_expr(nd.data[1]);
+          case NodeKind.ND_MUL:
+            return eval_const_expr(nd.data[0]) * eval_const_expr(nd.data[1]);
+          case NodeKind.ND_DIV:
+            return eval_const_expr(nd.data[0]) / eval_const_expr(nd.data[1]);
+        }
+
+        throw new Error(error_token(nd.loc, "not a compile-time constant"));
+      }
+
+      function pointer_array_arith_helper(arr, op, idx) {
+        const loc = arr.loc;
+        const i1 = new Node(
+          NodeKind.ND_MUL,
+          [idx, new_int_node(BigInt(arr.type.base.size), idx.loc)],
+          loc,
+          idx.type,
+        );
+
+        return new Node(op, [arr, i1], loc, arr.type);
+      }
+
+      function pointer_array_arith(lhs, op, rhs) {
+        const is_lhs_ptr =
+          lhs.type.kind == TypeKind.TY_ARRAY ||
+          lhs.type.kind == TypeKind.TY_PTR;
+        const is_rhs_ptr =
+          rhs.type.kind == TypeKind.TY_ARRAY ||
+          rhs.type.kind == TypeKind.TY_PTR;
+
+        if (is_lhs_ptr && is_rhs_ptr && op == NodeKind.ND_ADD) {
+          throw new Error(error_token(lhs.loc, "ptr + ptr is illegal"));
+        }
+
+        if (lhs.type.is_integer() && is_rhs_ptr && op == NodeKind.ND_SUB) {
+          throw new Error(error_token(lhs.loc, "num - ptr is illegal"));
+        }
+
+        // ptr - ptr
+        if (is_lhs_ptr && is_rhs_ptr && op == NodeKind.ND_SUB) {
+          const len = new Node(NodeKind.ND_SUB, [lhs, rhs], lhs.loc);
+          return new Node(
+            NodeKind.ND_DIV,
+            [len, new_int_node(BigInt(lhs.type.base.size), lhs.loc)],
+            lhs.loc,
+          );
+        }
+
+        // ptr +/- num
+        if (is_lhs_ptr && rhs.type.is_integer()) {
+          return pointer_array_arith_helper(lhs, op, rhs);
+        }
+
+        // num + ptr
+        return pointer_array_arith_helper(rhs, op, lhs);
+      }
+
+      class Parser {
+        constructor(l, symtbl) {
+          this.l = l;
+          this.curtok = this.l.next();
+          this.peektok = this.l.next();
+          this.offsets = 16;
+          this.var_table = symtbl || new SymbolTable(None);
+          this.tag_table = new SymbolTable(None);
+          this.gvars = [];
+          this.goffsets = 0;
+          this.break_label = None;
+          this.continue_label = None;
+          this.return_label = None;
+        }
+
+        parse() {
+          let tree = [];
+          let mainfunc;
+          while (this.curtok.kind != TokenKind.TK_END) {
+            let s = this.next();
+            if (s != None) {
+              if (s.kind == NodeKind.ND_FUNC && s.data.name.val == "main") {
+                mainfunc = s;
+              } else {
+                tree.push(s);
+              }
+            }
+          }
+
+          tree.push(mainfunc);
+          return {
+            tree: tree,
+            gvars: this.gvars,
+            filename: this.l.filename,
+          };
+        }
+
+        next() {
+          this.offsets = 16;
+          let loc = this.curtok;
+          const attr = this.var_attr();
+          if (attr.is_typedef) return this.typedef_stmt(true);
+
+          let basety = this.decl_spec();
+          let ty = this.declarator(basety);
+
+          // func or func prototype
+          if (ty.kind == TypeKind.TY_FUNC) {
+            if (this.curtok.kind == TokenKind.TK_LBRACE) {
+              return this.func(ty, attr);
+            }
+            return this.func_prototype(ty, attr);
+          }
+
+          // global variable
+          let b = false;
+          let init = 0;
+          while (true) {
+            if (b) {
+              this.skip(TokenKind.TK_COMMA);
+              ty = this.declarator(basety);
+            }
+            b = true;
+
+            if (this.curtok.kind == TokenKind.TK_ASSIGN) {
+              const loc = this.curtok;
+              this.advance();
+              init = this.initializer(ty);
+            }
+
+            const gv = this.new_gvar_node(ty.name, ty, init, attr);
+            this.define_var(ty.name, gv);
+            this.gvars.push(gv);
+            if (this.curtok.kind == TokenKind.TK_SEMICOLON) break;
+          }
+
+          this.skip(TokenKind.TK_SEMICOLON);
+          return None;
+        }
+
+        func_prototype(ty, attr) {
+          const loc = ty.name;
+
+          let fdef = new Node(
+            NodeKind.ND_FUNC,
+            {
+              name: ty.name,
+              param: [],
+              body: None,
+              stack_size: 0,
+              return_label: None,
+              attr: attr,
+            },
+            loc,
+            ty,
+          );
+
+          this.define_var(ty.name, fdef);
+          this.skip(TokenKind.TK_SEMICOLON);
+          return None;
+        }
+
+        func(ty, attr) {
+          const loc = ty.name;
+          let my_return = uniq_str(`.L.ret.${ty.name.val}`);
+          let fdef = this.find_var(ty.name);
+          if (
+            fdef != None &&
+            !(fdef.type.kind == TypeKind.TY_FUNC && fdef.data.body == None)
+          ) {
+            throw new Error(error_token(loc, `redefinition of ${loc.val}`));
+          }
+
+          if (fdef != None && ty.eq(fdef.type)) {
+            fdef.data.return_label = my_return;
+          } else {
+            fdef = new Node(
+              NodeKind.ND_FUNC,
+              {
+                name: ty.name,
+                param: [],
+                body: None,
+                stack_size: 0,
+                return_label: my_return,
+                attr: attr,
+              },
+              loc,
+              ty,
+            );
+
+            this.define_var(ty.name, fdef);
+          }
+
+          this.advance();
+          const return_save = this.return_label;
+          this.return_label = my_return;
+          var pnd = [];
+          this.enter_scope();
+          for (let p of ty.func.param) {
+            pnd.push(this.define_var(p.name, this.new_lvar_node(p.name, p)));
+          }
+
+          let bd = this.compound_stmt();
+          let stacksz = align_to(this.offsets, 8);
+
+          fdef.data.param = pnd;
+          fdef.data.body = bd;
+          fdef.data.stack_size = stacksz;
+          this.leave_scope();
+          this.return_label = return_save;
+          return fdef;
+        }
+
+        stmt() {
+          if (this.curtok.kind == TokenKind.TK_LBRACE) {
+            this.advance();
+            return this.compound_stmt();
+          }
+
+          if (this.curtok.kind == TokenKind.TK_KW_IF) return this.if_stmt();
+          if (this.curtok.kind == TokenKind.TK_KW_FOR) return this.for_stmt();
+          if (this.curtok.kind == TokenKind.TK_KW_WHILE)
+            return this.while_stmt();
+          if (this.curtok.kind == TokenKind.TK_KW_BREAK)
+            return this.break_stmt();
+          if (this.curtok.kind == TokenKind.TK_KW_CONTINUE) {
+            return this.continue_stmt();
+          }
+          if (this.curtok.kind == TokenKind.TK_KW_RETURN)
+            return this.return_stmt();
+          if (this.curtok.kind == TokenKind.TK_KW_TYPEDEF) {
+            this.advance();
+            return this.typedef_stmt(false);
+          }
+          if (this.is_typename(this.curtok)) return this.declaration();
+          return this.expr_stmt();
+        }
+
+        typedef_stmt(is_global = false) {
+          const loc = this.curtok;
+          const attr = { is_typedef: true };
+          let basety;
+          if (this.is_typename(this.curtok)) {
+            basety = this.decl_spec();
+          } else {
+            basety = int_ty;
+          }
+
+          let b = false;
+          while (this.curtok.kind != TokenKind.TK_SEMICOLON) {
+            if (b) this.skip(TokenKind.TK_COMMA);
+            b = true;
+            const ty = this.declarator(basety);
+            if (is_global) {
+              this.define_var(
+                ty.name,
+                this.new_gvar_node(ty.name, ty, 0, attr),
+              );
+            } else {
+              this.define_var(ty.name, this.new_lvar_node(ty.name, ty, attr));
+            }
+          }
+
+          this.skip(TokenKind.TK_SEMICOLON);
+          return None;
+        }
+
+        return_stmt() {
+          if (this.return_label == None) {
+            throw new Error(
+              error_token(this.curtok, "'return' not in function"),
+            );
+          }
+          const loc = this.curtok;
+          this.advance(); // skip "return"
+          const nd = this.expr_stmt();
+          return new Node(
+            NodeKind.ND_RETURN,
+            { expr: nd, label: this.return_label },
+            loc,
+            nd.type,
+          );
+        }
+
+        break_stmt() {
+          if (this.break_label == None) {
+            throw new Error(error_token(this.curtok, "'break' not in loop"));
+          }
+
+          const nd = new Node(NodeKind.ND_BREAK, this.break_label, this.curtok);
+          this.advance();
+          this.skip(TokenKind.TK_SEMICOLON);
+          return nd;
+        }
+
+        continue_stmt() {
+          if (this.continue_label == None) {
+            throw new Error(error_token(this.curtok, "'continue' not in loop"));
+          }
+
+          const nd = new Node(
+            NodeKind.ND_CONTINUE,
+            this.continue_label,
+            this.curtok,
+          );
+          this.advance();
+          this.skip(TokenKind.TK_SEMICOLON);
+          return nd;
+        }
+
+        expr_stmt() {
+          let loc = this.curtok;
+          if (this.curtok.kind == TokenKind.TK_SEMICOLON) {
+            this.advance();
+            return new Node(NodeKind.ND_BLOCK, [], loc);
+          }
+          let e = this.expr();
+          this.skip(TokenKind.TK_SEMICOLON);
+          return new Node(NodeKind.ND_EXPR_STMT, e, loc, e.type);
+        }
+
+        // stmt* "}"
+        compound_stmt() {
+          this.enter_scope();
+          let loc = this.curtok;
+          var stmts = [];
+          while (this.curtok.kind != TokenKind.TK_RBRACE) {
+            let s = this.stmt();
+            if (s != None) {
+              stmts.push(s);
+            }
+          }
+
+          this.skip(TokenKind.TK_RBRACE);
+          this.leave_scope();
+          return new Node(NodeKind.ND_BLOCK, stmts, loc);
+        }
+
+        while_stmt() {
+          const loc = this.curtok;
+          this.advance(); // skip "while"
+          this.skip(TokenKind.TK_LPAREN);
+          const cond = this.expr();
+          this.skip(TokenKind.TK_RPAREN);
+
+          const brk_save = this.break_label;
+          const contn_save = this.continue_label;
+          const my_brk = uniq_str(".L.brk");
+          const my_contn = uniq_str(".L.contn");
+          this.break_label = my_brk;
+          this.continue_label = my_contn;
+          const body = this.stmt();
+
+          this.break_label = brk_save;
+          this.continue_label = contn_save;
+
+          const init = new Node(NodeKind.ND_BLOCK, [], loc);
+          return new Node(
+            NodeKind.ND_FOR,
+            {
+              init: init,
+              cond: cond,
+              incr: None,
+              body: body,
+              break_label: my_brk,
+              continue_label: my_contn,
+            },
+            loc,
+          );
+        }
+
+        for_stmt() {
+          const loc = this.curtok;
+          this.advance(); // skip "for"
+
+          // init stmt
+          this.skip(TokenKind.TK_LPAREN);
+          let init;
+          if (this.is_typename(this.curtok)) {
+            init = this.declaration();
+          } else {
+            init = this.expr_stmt();
+          }
+
+          // cond expr
+          let cond = None;
+          if (this.curtok.kind == TokenKind.TK_SEMICOLON) {
+            this.advance();
+          } else {
+            cond = this.assign();
+            this.skip(TokenKind.TK_SEMICOLON);
+          }
+
+          // incr
+          let incr = None;
+          if (this.curtok.kind != TokenKind.TK_RPAREN) {
+            incr = this.expr();
+          }
+          this.skip(TokenKind.TK_RPAREN);
+
+          // body
+          const brk_save = this.break_label;
+          const contn_save = this.continue_label;
+          const my_brk = uniq_str(".L.brk");
+          const my_contn = uniq_str(".L.contn");
+          this.break_label = my_brk;
+          this.continue_label = my_contn;
+          const body = this.stmt();
+
+          this.break_label = brk_save;
+          this.continue_label = contn_save;
+
+          return new Node(
+            NodeKind.ND_FOR,
+            {
+              init: init,
+              cond: cond,
+              incr: incr,
+              body: body,
+              break_label: my_brk,
+              continue_label: my_contn,
+            },
+            loc,
+          );
+        }
+
+        if_stmt() {
+          const loc = this.curtok;
+          this.advance();
+          this.skip(TokenKind.TK_LPAREN);
+          if (this.curtok.kind == TokenKind.TK_RPAREN) {
+            throw new Error(
+              error_token(this.curtok, "expect condition expression"),
+            );
+          }
+          const cond = this.expr();
+          this.skip(TokenKind.TK_RPAREN);
+
+          const then = this.stmt();
+
+          let els = None;
+          if (this.curtok.kind == TokenKind.TK_KW_ELSE) {
+            this.advance();
+            els = this.stmt();
+          }
+
+          return new Node(
+            NodeKind.ND_IF,
+            { cond: cond, then: then, els: els },
+            loc,
+          );
+        }
+
+        is_typename(name) {
+          switch (name.kind) {
+            case TokenKind.TK_KW_VOID:
+            case TokenKind.TK_KW_CHAR:
+            case TokenKind.TK_KW_INT:
+            case TokenKind.TK_KW_LONG:
+            case TokenKind.TK_KW_STRUCT:
+            case TokenKind.TK_KW_UNION:
+              return true;
+          }
+
+          const v = this.find_var(name);
+          if (v != None && v.data.attr.is_typedef) return true;
+          return false;
+        }
+
+        new_lvar_node(name, ty, attr = { is_typedef: false }) {
+          this.offsets = align_to(this.offsets, ty.align);
+          this.offsets += ty.size;
+          let off = -this.offsets;
+          return new Node(
+            NodeKind.ND_VAR,
+            { name: name, offset: off, is_global: false, attr: attr },
+            name,
+            ty,
+          );
+        }
+
+        new_gvar_node(name, ty, initval = 0, attr = { is_typedef: false }) {
+          this.goffsets = align_to(this.goffsets, ty.align);
+          let off = this.goffsets;
+          this.goffsets += ty.size;
+          return new Node(
+            NodeKind.ND_VAR,
+            {
+              name: name,
+              offset: off,
+              initval: initval,
+              is_global: true,
+              attr: attr,
+            },
+            name,
+            ty,
+          );
+        }
+
+        // name: Token
+        define_var(name, nd) {
+          if (this.var_table.define(name.val, nd) == false) {
+            throw new Error(
+              error_token(name, String(`redefinition of ${name.val}`)),
+            );
+          }
+
+          return nd;
+        }
+
+        // name: Token
+        find_var(name) {
+          return this.var_table.resolve(name.val);
+        }
+
+        // name: Token
+        resolve_var(name) {
+          const v = this.var_table.resolve(name.val);
+          if (v == None) {
+            throw new Error(error_token(name, String(`undefined ${name.val}`)));
+          }
+          return v;
+        }
+
+        // name: Token
+        define_tag(name, ty) {
+          if (this.tag_table.define(name.val, ty) == false) {
+            throw new Error(
+              error_token(name, String(`redefinition of struct ${name.val}`)),
+            );
+          }
+
+          return ty;
+        }
+
+        // name: Token
+        resolve_tag(name) {
+          const v = this.tag_table.resolve(name.val);
+          if (v == None) {
+            throw new Error(
+              error_token(name, String(`undefined struct ${name.val}`)),
+            );
+          }
+          return v;
+        }
+
+        array_initializer(ty, is_global = true) {
+          if (!is_global && this.curtok.kind != TokenKind.TK_LBRACE) {
+            return [-1, this.assign()];
+          }
+
+          this.skip(TokenKind.TK_LBRACE);
+          let initval = Array(ty.array_len).fill(0);
+
+          let i = 0;
+          while (this.curtok.kind != TokenKind.TK_RBRACE) {
+            if (i > 0) this.skip(TokenKind.TK_COMMA);
+            if (i >= ty.array_len) {
+              throw new Error(
+                error_token(
+                  this.curtok,
+                  `excess elements in array initializer, expect less equal than ${ty.array_len}.`,
+                ),
+              );
+            }
+            initval[i] = this.initializer(ty.base, is_global);
+            i += 1;
+          }
+
+          this.skip(TokenKind.TK_RBRACE);
+          return initval;
+        }
+
+        struct_initializer(ty, is_global = true) {
+          if (!is_global && this.curtok.kind != TokenKind.TK_LBRACE) {
+            return [-1, this.assign()];
+          }
+
+          this.skip(TokenKind.TK_LBRACE);
+          let initval = Array(ty.struct_fields.length).fill(0);
+          let i = 0;
+          while (this.curtok.kind != TokenKind.TK_RBRACE) {
+            if (i > 0) this.skip(TokenKind.TK_COMMA);
+            if (i >= ty.struct_fields.length) {
+              throw new Error(
+                error_token(
+                  this.curtok,
+                  `excess elements in struct initializer, expect less equal than ${ty.struct_fields.length}.`,
+                ),
+              );
+            }
+            initval[i] = this.initializer(ty.struct_fields[i].type, is_global);
+            i += 1;
+          }
+
+          this.skip(TokenKind.TK_RBRACE);
+          return initval;
+        }
+
+        initializer(ty, is_global = true) {
+          if (ty.kind == TypeKind.TY_ARRAY) {
+            return this.array_initializer(ty, is_global);
+          }
+          if (ty.kind == TypeKind.TY_STRUCT) {
+            return this.struct_initializer(ty, is_global);
+          }
+
+          if (is_global) {
+            if (ty.is_integer()) {
+              return this.const_expr();
+            }
+            throw new Error(
+              error_token(this.curtok, "invalid global initializer"),
+            );
+          }
+
+          if (!is_global) {
+            return [-1, this.assign()];
+          }
+
+          throw new Error(error_token(this.curtok, "todo!"));
+        }
+
+        // arr[N] = {1,2,3} => arr[i] = 1; ...
+        init_lvar_array(id, initval) {
+          if (initval[0] == -1) return this.init_lvar_base(id, initval);
+
+          let stmts = [];
+          for (let i = 0; i < initval.length; i++) {
+            const v = initval[i];
+            const idx = new_int_node(i, v.loc);
+            const nd = new Node(
+              NodeKind.ND_DEREF,
+              pointer_array_arith(id, NodeKind.ND_ADD, idx),
+              v.loc,
+              id.type.base,
+            );
+
+            stmts = stmts.concat(this.init_lvar(nd, v));
+          }
+
+          return stmts;
+        }
+
+        // T t = {1,2, x}; => t.a = n; ...
+        init_lvar_struct(id, initval) {
+          if (initval[0] == -1) return this.init_lvar_base(id, initval);
+
+          let stmts = [];
+          for (let i = 0; i < initval.length; i++) {
+            const v = initval[i];
+            const field_nd = id.type.struct_fields[i];
+            const nd = new Node(
+              NodeKind.ND_STRUCT_REF,
+              [id, field_nd],
+              id.loc,
+              field_nd.type,
+            );
+
+            stmts = stmts.concat(this.init_lvar(nd, v));
+          }
+
+          return stmts;
+        }
+
+        init_lvar_base(id, initval) {
+          const assignexpr = new Node(
+            NodeKind.ND_ASSIGN,
+            [id, initval],
+            initval.loc,
+            id.type,
+          );
+
+          return [
+            new Node(
+              NodeKind.ND_EXPR_STMT,
+              assignexpr,
+              assignexpr.loc,
+              assignexpr.type,
+            ),
+          ];
+        }
+
+        // return [assign_expr_stmt]
+        init_lvar(id, initval) {
+          if (initval[0] == -1) return this.init_lvar_base(id, initval[1]);
+
+          if (id.type.kind == TypeKind.TY_ARRAY) {
+            return this.init_lvar_array(id, initval);
+          }
+
+          if (id.type.kind == TypeKind.TY_STRUCT) {
+            return this.init_lvar_struct(id, initval);
+          }
+        }
+
+        var_attr() {
+          let attr = { is_typedef: false };
+          if (this.curtok.kind == TokenKind.TK_KW_TYPEDEF) {
+            this.advance();
+            attr.is_typedef = true;
+          }
+          return attr;
+        }
+
+        // local
+        declaration() {
+          const start = this.curtok;
+          const var_attr = this.var_attr();
+          let basety = this.decl_spec();
+          let b = false;
+          let stmts = [];
+          while (this.curtok.kind != TokenKind.TK_SEMICOLON) {
+            if (b) this.skip(TokenKind.TK_COMMA);
+            b = true;
+
+            let ty = this.declarator(basety);
+            let id = this.define_var(
+              ty.name,
+              this.new_lvar_node(ty.name, ty, var_attr),
+            );
+
+            if (this.curtok.kind == TokenKind.TK_ASSIGN) {
+              let loc = this.curtok;
+              this.advance(); // skip "="
+              const initval = this.initializer(id.type, false);
+              let ss = this.init_lvar(id, initval);
+              stmts = stmts.concat(ss);
+            }
+          }
+
+          this.skip(TokenKind.TK_SEMICOLON);
+
+          return new Node(NodeKind.ND_BLOCK, stmts, start);
+        }
+
+        func_param(ty) {
+          this.advance();
+          var params = [];
+          while (this.curtok.kind != TokenKind.TK_RPAREN) {
+            params.push(this.declarator(this.decl_spec()));
+            if (this.curtok.kind == TokenKind.TK_COMMA) this.advance();
+          }
+
+          this.skip(TokenKind.TK_RPAREN);
+          // todo! func name
+          var f = new Type(TypeKind.TY_FUNC, 8, 8, None, ty.name);
+          f.func = { truename: ty.name, ret_ty: ty, param: params };
+          return f;
+        }
+
+        array_dim(ty) {
+          this.advance(); // skip [
+          if (this.curtok.kind == TokenKind.TK_RBRAK) {
+            this.advance();
+            ty = this.type_suffix(ty);
+            return Type.array_of(ty, -1);
+          }
+
+          const len = this.const_expr();
+          this.skip(TokenKind.TK_RBRAK);
+          ty = this.type_suffix(ty);
+          return Type.array_of(ty, len);
+        }
+
+        const_expr() {
+          const iexpr = this.conditional();
+          return eval_const_expr(iexpr);
+        }
+
+        type_suffix(ty) {
+          // func param
+          if (this.curtok.kind == TokenKind.TK_LPAREN) {
+            return this.func_param(ty);
+          }
+
+          if (this.curtok.kind == TokenKind.TK_LBRAK) {
+            return this.array_dim(ty);
+          }
+
+          return ty;
+        }
+
+        // return Type
+        declarator(ty) {
+          const loc = this.curtok;
+          const myty = this.abstract_declarator(ty);
+          if (myty.name == None) {
+            throw new Error(error_token(loc, "ERROR PARSE: expect ident"));
+          }
+          return myty;
+        }
+
+        // return Type.
+        abstract_declarator(ty) {
+          let myty = ty.clone();
+          while (this.curtok.kind == TokenKind.TK_ASTERISK) {
+            this.advance();
+            myty = myty.to_pointer();
+          }
+
+          // nested
+          if (this.curtok.kind == TokenKind.TK_LPAREN) {
+            this.advance();
+            let lexer = new Lexer(
+              this.curtok.src.slice(this.curtok.pos, -1),
+              this.curtok.filename,
+            );
+            let parser = new Parser(lexer);
+
+            // skip nested part
+            let dumy = new Type();
+            this.abstract_declarator(dumy);
+            this.skip(TokenKind.TK_RPAREN);
+            myty = this.type_suffix(myty);
+            return parser.abstract_declarator(myty);
+          }
+
+          if (this.curtok.kind == TokenKind.TK_IDENT) {
+            let name = this.curtok;
+            this.advance();
+            return this.type_suffix(myty.set_name(name));
+          }
+
+          return this.type_suffix(myty);
+        }
+
+        // return type
+        decl_spec(attr) {
+          const VOID = 1 << 0;
+          const CHAR = 1 << 2;
+          const INT = 1 << 4;
+          const LONG = 1 << 6;
+
+          let loc = this.curtok;
+          var tycnt = 0;
+          while (true) {
+            if (this.curtok.kind == TokenKind.TK_KW_VOID) {
+              tycnt += VOID;
+              this.advance();
+              continue;
+            }
+
+            if (this.curtok.kind == TokenKind.TK_KW_CHAR) {
+              tycnt += CHAR;
+              this.advance();
+              continue;
+            }
+
+            if (this.curtok.kind == TokenKind.TK_KW_INT) {
+              tycnt += INT;
+              this.advance();
+              continue;
+            }
+
+            if (this.curtok.kind == TokenKind.TK_KW_LONG) {
+              tycnt += LONG;
+              this.advance();
+              continue;
+            }
+
+            break;
+          }
+
+          switch (tycnt) {
+            case VOID:
+              return void_ty;
+            case CHAR:
+              return char_ty;
+            case INT:
+              return int_ty;
+            case LONG:
+            case INT + LONG:
+              return long_ty;
+          }
+
+          if (this.curtok.kind == TokenKind.TK_KW_STRUCT)
+            return this.struct_decl();
+          if (this.curtok.kind == TokenKind.TK_KW_UNION)
+            return this.union_decl();
+
+          const v = this.find_var(this.curtok);
+          if (v != None) {
+            if (v.data.attr.is_typedef) {
+              this.advance();
+              return v.type;
+            }
+          }
+
+          throw new Error(
+            error_token(
+              loc,
+              String(
+                `a type specifier is required, but found ${loc.kind.toString()}`,
+              ),
+            ),
+          );
+        }
+
+        struct_decl() {
+          this.advance(); // skip "struct"
+          let tag = None;
+          if (this.curtok.kind == TokenKind.TK_IDENT) {
+            tag = this.curtok;
+            this.advance();
+            if (this.curtok.kind != TokenKind.TK_LBRACE) {
+              return this.resolve_tag(tag);
+            }
+          }
+
+          // new struct
+          this.skip(TokenKind.TK_LBRACE);
+          let fields = [];
+          let sz = 0;
+          let alg = 1;
+          let offset = 0;
+          while (this.curtok.kind != TokenKind.TK_RBRACE) {
+            let basety = this.decl_spec();
+            let b = false;
+            while (this.curtok.kind != TokenKind.TK_SEMICOLON) {
+              if (b) this.skip(TokenKind.TK_COMMA);
+              const loc = this.curtok;
+              let ty = this.declarator(basety);
+              offset = align_to(offset, ty.align);
+              const fnd = new Node(
+                NodeKind.ND_VAR,
+                { name: ty.name, offset: offset },
+                loc,
+                ty,
+              );
+              offset += ty.size;
+              if (ty.align > alg) alg = ty.align;
+              fields.push(fnd);
+              b = true;
+            }
+            this.skip(TokenKind.TK_SEMICOLON);
+          }
+          this.skip(TokenKind.TK_RBRACE);
+          sz = align_to(offset, alg);
+          let struct_ty = new Type(TypeKind.TY_STRUCT, sz, alg, None);
+          struct_ty.struct_fields = fields;
+          struct_ty.struct_tag = tag;
+          return this.define_tag(tag, struct_ty);
+        }
+
+        union_decl() {
+          this.advance(); // skip "union"
+          let tag = None;
+          if (this.curtok.kind == TokenKind.TK_IDENT) {
+            tag = this.curtok;
+            this.advance();
+            if (this.curtok.kind != TokenKind.TK_LBRACE) {
+              return this.resolve_tag(tag);
+            }
+          }
+
+          // new union
+          this.skip(TokenKind.TK_LBRACE);
+          let fields = [];
+          let sz = 0;
+          let alg = 1;
+          const off = 0;
+          while (this.curtok.kind != TokenKind.TK_RBRACE) {
+            let basety = this.decl_spec();
+            let b = false;
+            while (this.curtok.kind != TokenKind.TK_SEMICOLON) {
+              if (b) this.skip(TokenKind.TK_COMMA);
+              const loc = this.curtok;
+              let ty = this.declarator(basety);
+              if (ty.size > sz) sz = ty.size;
+              if (ty.align > alg) alg = ty.align;
+              const fnd = new Node(
+                NodeKind.ND_VAR,
+                { name: ty.name, offset: off },
+                loc,
+                ty,
+              );
+              fields.push(fnd);
+              b = true;
+            }
+            this.skip(TokenKind.TK_SEMICOLON);
+          }
+          this.skip(TokenKind.TK_RBRACE);
+          let struct_ty = new Type(TypeKind.TY_STRUCT, sz, alg, None);
+          struct_ty.struct_fields = fields;
+          struct_ty.struct_tag = tag;
+
+          return this.define_tag(tag, struct_ty);
+        }
+
+        expr() {
+          return this.assign();
+        }
+
+        assign() {
+          var nd = this.conditional();
+          if (this.curtok.kind == TokenKind.TK_ASSIGN) {
+            let postok = this.curtok;
+            this.advance();
+            return new Node(
+              NodeKind.ND_ASSIGN,
+              [nd, this.assign()],
+              postok,
+              nd.type,
+            );
+          }
+
+          return nd;
+        }
+
+        // logor ? then : else
+        conditional() {
+          var cond = this.logor();
+          if (this.curtok.kind == TokenKind.TK_COND) {
+            let postok = this.curtok;
+            this.advance();
+            let then = this.expr();
+            this.skip(TokenKind.TK_COLON);
+            let els = this.expr();
+            return new Node(NodeKind.ND_CONDITIONAL, [cond, then, els], postok);
+          }
+
+          return cond;
+        }
+
+        logor() {
+          var nd = this.logand();
+          while (true) {
+            if (this.curtok.kind == TokenKind.TK_LOGOR) {
+              let postok = this.curtok;
+              this.advance();
+              nd = new Node(NodeKind.ND_LOGOR, [nd, this.logand()], postok);
+              continue;
+            }
+
+            break;
+          }
+
+          return nd;
+        }
+
+        logand() {
+          var nd = this.equality();
+          while (true) {
+            if (this.curtok.kind == TokenKind.TK_LOGAND) {
+              let postok = this.curtok;
+              this.advance();
+              nd = new Node(NodeKind.ND_LOGAND, [nd, this.equality()], postok);
+              continue;
+            }
+
+            break;
+          }
+
+          return nd;
+        }
+
+        equality() {
+          var nd = this.relational();
+          while (true) {
+            if (this.curtok.kind == TokenKind.TK_EQ) {
+              let postok = this.curtok;
+              this.advance();
+              nd = new Node(NodeKind.ND_EQ, [nd, this.relational()], postok);
+              continue;
+            }
+
+            if (this.curtok.kind == TokenKind.TK_NE) {
+              let postok = this.curtok;
+              this.advance();
+              nd = new Node(NodeKind.ND_NE, [nd, this.relational()], postok);
+              continue;
+            }
+
+            break;
+          }
+
+          return nd;
+        }
+
+        relational() {
+          var nd = this.add();
+          while (true) {
+            if (this.curtok.kind == TokenKind.TK_LT) {
+              let postok = this.curtok;
+              this.advance();
+              nd = new_binary_node(NodeKind.ND_LT, nd, this.add(), postok);
+              continue;
+            }
+
+            if (this.curtok.kind == TokenKind.TK_GT) {
+              let postok = this.curtok;
+              this.advance();
+              nd = new_binary_node(NodeKind.ND_GT, nd, this.add(), postok);
+              continue;
+            }
+
+            if (this.curtok.kind == TokenKind.TK_LE) {
+              let postok = this.curtok;
+              this.advance();
+              nd = new_binary_node(NodeKind.ND_LE, nd, this.add(), postok);
+              continue;
+            }
+
+            if (this.curtok.kind == TokenKind.TK_GE) {
+              let postok = this.curtok;
+              this.advance();
+              nd = new_binary_node(NodeKind.ND_GE, nd, this.add(), postok);
+              continue;
+            }
+
+            break;
+          }
+
+          return nd;
+        }
+
+        add() {
+          var nd = this.mul();
+          while (true) {
+            if (this.curtok.kind == TokenKind.TK_PLUS) {
+              let postok = this.curtok;
+              this.advance();
+              const rhs = this.mul();
+              if (
+                nd.type.kind == TypeKind.TY_ARRAY ||
+                nd.type.kind == TypeKind.TY_PTR ||
+                rhs.type.kind == TypeKind.TY_ARRAY ||
+                rhs.type.kind == TypeKind.TY_PTR
+              ) {
+                return pointer_array_arith(nd, NodeKind.ND_ADD, rhs);
+              }
+
+              nd = new_binary_node(NodeKind.ND_ADD, nd, rhs, postok);
+
+              continue;
+            }
+
+            if (this.curtok.kind == TokenKind.TK_MINUS) {
+              let postok = this.curtok;
+              this.advance();
+              const rhs = this.mul();
+              if (
+                nd.type.kind == TypeKind.TY_ARRAY ||
+                nd.type.kind == TypeKind.TY_PTR ||
+                rhs.type.kind == TypeKind.TY_ARRAY ||
+                rhs.type.kind == TypeKind.TY_PTR
+              ) {
+                return pointer_array_arith(nd, NodeKind.ND_SUB, rhs);
+              }
+
+              nd = new_binary_node(NodeKind.ND_SUB, nd, rhs, postok);
+              continue;
+            }
+            break;
+          }
+
+          return nd;
+        }
+
+        // unary ((* | / | %) unary)*
+        mul() {
+          var nd = this.unary();
+          while (true) {
+            if (this.curtok.kind == TokenKind.TK_ASTERISK) {
+              let postok = this.curtok;
+              this.advance();
+              nd = new_binary_node(NodeKind.ND_MUL, nd, this.unary(), postok);
+              continue;
+            }
+
+            if (this.curtok.kind == TokenKind.TK_SLASH) {
+              let postok = this.curtok;
+              this.advance();
+              nd = new_binary_node(NodeKind.ND_DIV, nd, this.unary(), postok);
+              continue;
+            }
+
+            if (this.curtok.kind == TokenKind.TK_MOD) {
+              let postok = this.curtok;
+              this.advance();
+              nd = new_binary_node(NodeKind.ND_MOD, nd, this.unary(), postok);
+              continue;
+            }
+
+            break;
+          }
+
+          return nd;
+        }
+
+        // (* | & | + | - | !) unary | postfix
+        unary() {
+          if (this.curtok.kind == TokenKind.TK_ASTERISK) {
+            let loc = this.curtok;
+            this.advance();
+            let nd = this.unary();
+            return new Node(NodeKind.ND_DEREF, nd, loc, nd.type.base);
+          }
+
+          if (this.curtok.kind == TokenKind.TK_BITAND) {
+            let loc = this.curtok;
+            this.advance();
+            let nd = this.unary();
+            return new Node(NodeKind.ND_ADDR, nd, loc, nd.type.to_pointer());
+          }
+
+          if (this.curtok.kind == TokenKind.TK_PLUS) {
+            this.advance();
+            return this.unary();
+          }
+
+          if (this.curtok.kind == TokenKind.TK_MINUS) {
+            let loc = this.curtok;
+            this.advance();
+            let nd = this.unary();
+            return new Node(NodeKind.ND_NEG, nd, loc, nd.type);
+          }
+
+          if (this.curtok.kind == TokenKind.TK_BANG) {
+            let loc = this.curtok;
+            this.advance();
+            let nd = this.unary();
+            return new Node(NodeKind.ND_NOT, nd, loc, nd.type);
+          }
+
+          return this.postfix();
+        }
+
+        struct_field(left, field) {
+          let field_nd = None;
+          for (let fd of left.type.struct_fields) {
+            if (field.val == fd.data.name.val) {
+              field_nd = fd;
+              break;
+            }
+          }
+
+          if (field_nd == None) {
+            throw new Error(error_token(field, "not a valid struct field"));
+          }
+
+          return field_nd;
+        }
+
+        struct_ref(left, field) {
+          if (left.type.kind != TypeKind.TY_STRUCT) {
+            throw new Error(error_token(left.loc, "not a struct type"));
+          }
+
+          const field_nd = this.struct_field(left, field);
+          return new Node(
+            NodeKind.ND_STRUCT_REF,
+            [left, field_nd],
+            field,
+            field_nd.type,
+          );
+        }
+
+        // postfix = primary ("[" expr "]" | struct_ref)*
+        postfix() {
+          let left = this.primary();
+          const loc = this.curtok;
+          while (true) {
+            // lhs[i] -> *(lhs + i * lhs.type.base.size)
+            if (this.curtok.kind == TokenKind.TK_LBRAK) {
+              this.advance();
+              const idx = this.expr();
+              this.skip(TokenKind.TK_RBRAK);
+              const nd = pointer_array_arith(left, NodeKind.ND_ADD, idx);
+              left = new Node(NodeKind.ND_DEREF, nd, loc, left.type.base);
+
+              continue;
+            }
+
+            // t.a, t->a => (*t).a
+            if (this.curtok.kind == TokenKind.TK_DOT) {
+              this.advance();
+              const field = this.curtok;
+              this.skip(TokenKind.TK_IDENT);
+
+              left = this.struct_ref(left, field);
+              continue;
+            }
+
+            if (this.curtok.kind == TokenKind.TK_THIN_RIGHT_ARROW) {
+              const loc = this.curtok;
+              this.advance();
+              const field = this.curtok;
+              this.skip(TokenKind.TK_IDENT);
+
+              left = this.struct_ref(
+                new Node(NodeKind.ND_DEREF, left, loc, left.type.base),
+                field,
+              );
+              continue;
+            }
+
+            break;
+          }
+
+          return left;
+        }
+
+        // int | ident | "(" expr ")" | funcall | string | "sizeof"
+        primary() {
+          let postok = this.curtok;
+          if (this.curtok.kind == TokenKind.TK_INT) {
+            let i = BigInt(this.curtok.val); // int64
+            this.advance();
+
+            if (i >= 2n ** 32n) return new_long_node(i, postok);
+
+            return new_int_node(i, postok);
+          }
+
+          if (this.curtok.kind == TokenKind.TK_LPAREN) {
+            this.advance();
+            let e = this.expr();
+            this.skip(TokenKind.TK_RPAREN);
+            return e;
+          }
+
+          if (this.curtok.kind == TokenKind.TK_IDENT) {
+            if (this.peektok.kind == TokenKind.TK_LPAREN) {
+              return this.funcall();
+            }
+
+            let id = this.resolve_var(this.curtok);
+            this.advance();
+            return id;
+          }
+
+          if (this.curtok.kind == TokenKind.TK_STR) {
+            const name = this.curtok;
+            let str = this.curtok.val.split("").map((e) => e.charCodeAt(0));
+            str.push(0);
+            const ty = Type.array_of(char_ty, str.length);
+            name.val = uniq_str(".L.STR");
+            this.advance();
+            const gvar = this.new_gvar_node(name, ty, str);
+            this.gvars.push(gvar);
+            return this.define_var(name, gvar);
+          }
+
+          if (this.curtok.kind == TokenKind.TK_KW_SIZEOF) {
+            const loc = this.curtok;
+            this.advance();
+            const nd = this.unary();
+            return new_int_node(nd.type.size, loc);
+          }
+
+          throw new Error(
+            error_token(
+              this.curtok,
+              `ERROR PARSE: todo! <${this.curtok.kind.toString()}, ${this.curtok.val}>`,
+            ),
+          );
+        }
+
+        funcall() {
+          let loc = this.curtok;
+          let f = this.resolve_var(this.curtok);
+
+          if (f.kind != NodeKind.ND_FUNC) {
+            throw new Error(
+              error_token(
+                this.curtok,
+                `ERROR PARSE: ${this.curtok.val} is not a function`,
+              ),
+            );
+          }
+          this.advance();
+          this.advance();
+          let arg = this.parse_list(TokenKind.TK_COMMA, TokenKind.TK_RPAREN);
+
+          // todo!
+          // for (let i = 0; i < f.type.func.param.length; i++) {
+          //   arg[i].type = f.type.func.param[i];
+          // }
+
+          return new Node(
+            NodeKind.ND_FUNCALL,
+            { func: f, arg: arg },
+            loc,
+            f.type.func.ret_ty,
+          );
+        }
+
+        parse_list(sep, end) {
+          let arg = [];
+          while (this.curtok.kind != end) {
+            arg.push(this.expr());
+            if (this.curtok.kind == sep) this.advance();
+          }
+          this.skip(end);
+          return arg;
+        }
+
+        skip(tk) {
+          if (this.curtok.kind == tk) {
+            this.advance();
+          } else {
+            let msg = error_token(this.curtok, `expect ${tk.toString()}`);
+            throw new Error(msg);
+          }
+        }
+
+        advance() {
+          this.curtok = this.peektok;
+          this.peektok = this.l.next();
+        }
+
+        enter_scope() {
+          this.var_table = new SymbolTable(this.var_table);
+          this.tag_table = new SymbolTable(this.tag_table);
+        }
+
+        leave_scope() {
+          this.var_table = this.var_table.out;
+          this.tag_table = this.tag_table.out;
+        }
+      }
+
+      function parse(src) {
+        // Counter.reset(0);
+        let l = new Lexer(src);
+        let p = new Parser(l);
+        return p.parse();
+      }
+
+      ////////////////////
+      // part 3 codegen //
+      ////////////////////
+      function println(ins) {
+        console.log(ins);
+      }
+
+      // register
+      const ZERO = 0;
+      const RA = 1;
+      const TP = 2;
+      const SP = 3;
+      const A0 = 4;
+      const A1 = 5;
+      const A2 = 6;
+      const A3 = 7;
+      const A4 = 8;
+      const A5 = 9;
+      const A6 = 10;
+      const A7 = 11;
+      const T0 = 12;
+      const T1 = 13;
+      const T2 = 14;
+      const T3 = 15;
+      const T4 = 16;
+      const T5 = 17;
+      const T6 = 18;
+      const T7 = 19;
+      const T8 = 20;
+      const R21 = 21;
+      const FP = 22;
+      const S0 = 23;
+      const S1 = 24;
+      const S2 = 25;
+      const S3 = 26;
+      const S4 = 27;
+      const S5 = 28;
+      const S6 = 29;
+      const S7 = 30;
+      const S8 = 31;
+
+      function reg2str(r) {
+        if (r < 0) return "";
+        const regstrs = Array(33);
+        regstrs[ZERO] = "zero"; // r0
+        regstrs[RA] = "ra"; // r1
+        regstrs[TP] = "tp"; // r2
+        regstrs[SP] = "sp"; //r3
+        regstrs[A0] = "a0"; // r4
+        regstrs[A1] = "a1";
+        regstrs[A2] = "a2";
+        regstrs[A3] = "a3";
+        regstrs[A4] = "a4";
+        regstrs[A5] = "a5";
+        regstrs[A6] = "a6";
+        regstrs[A7] = "a7"; // r11
+        regstrs[T0] = "t0"; // r12
+        regstrs[T1] = "t1";
+        regstrs[T2] = "t2";
+        regstrs[T3] = "t3";
+        regstrs[T4] = "t4";
+        regstrs[T5] = "t5";
+        regstrs[T6] = "t6";
+        regstrs[T7] = "t7";
+        regstrs[T8] = "t8"; // r20
+        regstrs[R21] = "r21";
+        regstrs[FP] = "fp"; // r22
+        regstrs[S0] = "s0"; // r23
+        regstrs[S1] = "s1";
+        regstrs[S2] = "s2";
+        regstrs[S3] = "s3";
+        regstrs[S4] = "s4";
+        regstrs[S5] = "s5";
+        regstrs[S6] = "s6";
+        regstrs[S7] = "s7";
+        regstrs[S8] = "s8"; //r31
+
+        return regstrs[r];
+      }
+
+      // OPCODE
+      class Op {
+        static ADD_W = Symbol("add.w");
+        static ADD_D = Symbol("add.d");
+        static SUB_W = Symbol("sub.w");
+        static SUB_D = Symbol("sub.d");
+        static MUL_W = Symbol("mul.w");
+        static MULH_W = Symbol("mulh.w");
+        static MULH_WU = Symbol("mulh.wu");
+        static MULW_D_W = Symbol("mulw.d.w");
+        static MULW_D_WU = Symbol("mulw.d.wu");
+        static MUL_D = Symbol("mul.d");
+        static MULH_D = Symbol("mulh.d");
+        static MULH_DU = Symbol("mulh.du");
+        static DIV_W = Symbol("div.w");
+        static DIV_WU = Symbol("div.wu");
+        static DIV_D = Symbol("div.d");
+        static DIV_DU = Symbol("div.du");
+        static MOD_W = Symbol("mod.w");
+        static MOD_WU = Symbol("mod.wu");
+        static MOD_D = Symbol("mod.d");
+        static MOD_DU = Symbol("mod.du");
+        static ADDI_W = Symbol("addi.w");
+        static ADDI_D = Symbol("addi.d");
+        static ALSL_W = Symbol("alsl.w");
+        static LU12I_W = Symbol("lu12i.w");
+        static LU32I_D = Symbol("lu32i.d");
+        static LU52I_D = Symbol("lu52i.d");
+        static SLT = Symbol("slt");
+        static SLTU = Symbol("sltu");
+        static SLTI = Symbol("slti");
+        static SLTUI = Symbol("sltui");
+        static PCADDI = Symbol("pcaddi");
+        static PCADDU12I = Symbol("pcaddu12i");
+        static PCALAU12I = Symbol("pcalau12i");
+        static AND = Symbol("and");
+        static OR = Symbol("or");
+        static NOR = Symbol("nor");
+        static XOR = Symbol("xor");
+        static ANDN = Symbol("andn");
+        static ORN = Symbol("orn");
+        static ANDI = Symbol("andi");
+        static ORI = Symbol("ori");
+        static XORI = Symbol("xori");
+
+        // 移位运算  =
+        static SLL_W = Symbol("sll.w");
+        static SLL_D = Symbol("sll.d");
+        static SRL_W = Symbol("srl.w");
+        static SRL_D = Symbol("srl.d");
+        static SRA_W = Symbol("sra.w");
+        static SRA_D = Symbol("sra.d");
+        static ROTR_W = Symbol("rotr.w");
+        static ROTR_D = Symbol("rotr.d");
+        static SLLI_W = Symbol("slli.w");
+        static SLLI_D = Symbol("slli.d");
+        static SRLI_W = Symbol("srli.w");
+        static SRLI_D = Symbol("srli.d");
+        static SRAI_W = Symbol("srai.w");
+        static SRAI_D = Symbol("srai.d");
+        static ROTRI_W = Symbol("rotri.w");
+        static ROTRI_D = Symbol("rotri.d");
+
+        // 位操作
+        static EXT_W_B = Symbol("ext.w.b");
+        static EXT_W_H = Symbol("ext.w.h");
+        static CLO_W = Symbol("clo.w");
+        static CLZ_W = Symbol("clz.w");
+        static CTO_W = Symbol("cto.w");
+        static CTZ_W = Symbol("ctz.w");
+        static BYTEPICK_W = Symbol("bytepick.w");
+        static BSTRPICK_D = Symbol("bstrpick.d");
+        static BEQ = Symbol("beq");
+        static BNE = Symbol("bne");
+        static BLT = Symbol("blt");
+        static BGE = Symbol("bge");
+        static BLTU = Symbol("bltu");
+        static BGEU = Symbol("bgeu");
+        static BEQZ = Symbol("beqz");
+        static BNEZ = Symbol("bnez");
+        static B = Symbol("b");
+        static BL = Symbol("bl");
+        static JIRL = Symbol("jirl");
+        static LD_B = Symbol("ld.b");
+        static LD_H = Symbol("ld.h");
+        static LD_W = Symbol("ld.w");
+        static LD_D = Symbol("ld.d");
+        static LD_BU = Symbol("ld.bu");
+        static LD_HU = Symbol("ld.hu");
+        static LD_WU = Symbol("ld.wu");
+        static ST_B = Symbol("st.b");
+        static ST_H = Symbol("st.h");
+        static ST_W = Symbol("st.w");
+        static ST_D = Symbol("st.d");
+        static PRELD = Symbol("preld");
+
+        // syscall
+        static PRTF = Symbol("printf");
+
+        static LABEL = Symbol("label");
+        static DOT_PSEUDO = Symbol("dot_pseudo");
+      }
+
+      class Instruction {
+        constructor(
+          op,
+          d = None,
+          j = None,
+          k = None,
+          any = None,
+          label = None,
+        ) {
+          this._op = op;
+          this._d = d;
+          this._j = j;
+          this._k = k;
+          this._any = any;
+          this._label = label;
+        }
+
+        op() {
+          return this._op;
+        }
+
+        d() {
+          return this._d;
+        }
+
+        j() {
+          return this._j;
+        }
+
+        k() {
+          return this._k;
+        }
+
+        any() {
+          return this._any;
+        }
+
+        set_any(n) {
+          this._any = n;
+        }
+
+        label() {
+          return this._label;
+        }
+
+        set_label(str) {
+          this._label = str;
+        }
+
+        to_asm() {
+          switch (this.op()) {
+            case Op.BEQ:
+            case Op.BNE:
+            case Op.BLT:
+            case Op.BGE:
+            case Op.BLTU:
+            case Op.BGEU:
+              return String(
+                `${this.op().description} $${reg2str(this.j())}, $${reg2str(
+                  this.d(),
+                )}, ${this.label()}`,
+              );
+
+            case Op.JIRL:
+              if (this.d() == ZERO && this.j() == RA && this.any() == 0)
+                return "ret";
+              return String(
+                `jirl $${this.d()}, $${reg2str(this.j())}, ${this.label()}`,
+              );
+
+            case Op.BEQZ:
+            case Op.BNEZ:
+              return String(
+                `${this.op().description} ${reg2str(this.j())} ${this.label()}`,
+              );
+
+            case Op.PCADDI:
+              return String(
+                `${this.op().description} $${reg2str(this.d())}, ${this.label()}`,
+              );
+
+            case Op.B:
+            case Op.BL:
+              return String(`${this.op().description} ${this.label()}`);
+
+            case Op.DOT_PSEUDO:
+              return String(`${this.label().name} ${this.any()}`);
+
+            case Op.LABEL:
+              return this.label();
+
+            default:
+              return this.to_str();
+          }
+        }
+
+        to_str() {
+          let rs = [this.d(), this.j(), this.k()].filter((e) => {
+            return e != None;
+          });
+
+          var str = rs.map((r) => "$" + reg2str(r));
+
+          if (this.any() != None) {
+            str.push(String(this.any()));
+          }
+
+          if (this.label() != None) {
+            str.push(this.label());
+          }
+
+          let opstr = this.op().description;
+
+          return String(`${opstr} ${str.join(", ")}`);
+        }
+      }
+
+      class InstructionList {
+        constructor(metainfo, instructions) {
+          this.metainfo = metainfo;
+          this.instructions = instructions;
+        }
+
+        to_asm() {
+          return this.instructions
+            .filter((i) => {
+              return i != undefined;
+            })
+            .map((i) => {
+              return i.to_asm();
+            });
+        }
+
+        to_format_asm() {
+          return this.instructions
+            .filter((i) => {
+              return i != undefined;
+            })
+            .map((i) => {
+              if (i.op() != Op.LABEL) {
+                return "    " + i.to_asm();
+              } else {
+                return i.to_asm();
+              }
+            });
+        }
+      }
+
+      function get_pseudo(sz) {
+        let pseudo = None;
+        switch (sz) {
+          case 1:
+            pseudo = { name: ".byte", size: 1 };
+            break;
+          case 4:
+            pseudo = { name: ".word", size: 4 };
+            break;
+          case 8:
+            pseudo = { name: ".dword", size: 8 };
+            break;
+        }
+        return pseudo;
+      }
+
+      function Pseudo(name, sz = 1) {
+        return { name: name, size: sz };
+      }
+
+      // loongarch64 assembly
+      class Compiler {
+        constructor(bufsz = 4096) {
+          this.insts = Array(bufsz);
+          this.ip = 0;
+          this.object_ip = new SymbolTable(None);
+          this.main_ip = None;
+          this.break_ip = [];
+          this.continue_ip = [];
+          this.return_ip = [];
+        }
+
+        codegen(treelist) {
+          const datasz = this.gen_data(treelist.gvars);
+
+          const startip = this.ip;
+          this.gen_inst(Op.DOT_PSEUDO, None, None, None, "", Pseudo(".text"));
+          this.gen_inst(
+            Op.DOT_PSEUDO,
+            None,
+            None,
+            None,
+            treelist.filename,
+            Pseudo(".file"),
+          );
+          this.gen_inst(
+            Op.DOT_PSEUDO,
+            None,
+            None,
+            None,
+            "main",
+            Pseudo(".globl"),
+          );
+          // emit text
+          for (let nd of treelist.tree) {
+            this.gen_func(nd);
+          }
+
+          const textsz = this.ip - startip;
+
+          return new InstructionList(
+            {
+              main_ip: this.main_ip,
+              text_size: textsz,
+              data_size: datasz,
+              filename: treelist.filename,
+            },
+            this.insts.slice(0, datasz + textsz),
+          );
+        }
+
+        gen_data(gvars) {
+          let data_size = 1;
+          this.gen_inst(Op.DOT_PSEUDO, None, None, None, "", Pseudo(".data"));
+          for (let gv of gvars) {
+            this.gen_label(gv.data.name.val);
+            this.define_obj_ip(gv.data.name, this.ip);
+            data_size += 1;
+            data_size += this.gen_gvar(gv.type, gv.data.initval);
+          }
+
+          return data_size;
+        }
+
+        gen_gvar(ty, initval) {
+          if (ty.kind == TypeKind.TY_ARRAY)
+            return this.gen_gvar_array(ty, initval);
+          if (ty.kind == TypeKind.TY_STRUCT)
+            return this.gen_gvar_struct(ty, initval);
+
+          return this.gen_gvar_int(ty, initval);
+        }
+
+        gen_gvar_int(ty, initval) {
+          let pseudo = get_pseudo(ty.size);
+          myassert(pseudo != None);
+
+          this.gen_inst(
+            Op.DOT_PSEUDO,
+            None,
+            None,
+            None,
+            initval,
+            pseudo,
+            ty.size,
+          );
+
+          return ty.size;
+        }
+
+        gen_gvar_struct(type, initval) {
+          if (initval == 0) {
+            this.gen_inst(
+              Op.DOT_PSEUDO,
+              None,
+              None,
+              None,
+              type.size,
+              Pseudo(".space", type.size),
+              type.size,
+            );
+            return type.size;
+          }
+
+          let i = 0;
+          let offsets = type.struct_fields.map((fnd) => {
+            return fnd.data.offset;
+          });
+          offsets.push(type.size);
+
+          for (let f of type.struct_fields) {
+            let v = initval[i];
+            const d = offsets[i + 1] - offsets[i];
+            const len = this.gen_gvar(f.type, v);
+            const space = d - f.type.size;
+            if (space > 0) {
+              this.gen_inst(
+                Op.DOT_PSEUDO,
+                None,
+                None,
+                None,
+                space,
+                Pseudo(".space", space),
+                space,
+              );
+            }
+            i += 1;
+          }
+
+          return type.size;
+        }
+
+        gen_gvar_array(type, initval) {
+          // if (gv.type.base.kind == TypeKind.TY_CHAR) {
+          //   this.gen_inst(
+          //     Op.DOT_PSEUDO,
+          //     None,
+          //     None,
+          //     None,
+          //     ".asciz",
+          //     String(
+          //       `"${
+          //         gv.data.initval.map((a) => String.fromCharCode(a)).join("")
+          //       }"`,
+          //     ),
+          //   );
+          //   data_size += 1;
+          //   continue;
+          // }
+
+          if (initval == 0) {
+            this.gen_inst(
+              Op.DOT_PSEUDO,
+              None,
+              None,
+              None,
+              type.size,
+              Pseudo(".space", type.size),
+              type.size,
+            );
+
+            return type.size;
+          }
+
+          // initval != 0
+          for (let i = 0; i < initval.length; i++) {
+            this.gen_gvar(type.base, initval[i]);
+          }
+
+          const space = type.size - type.base.size * initval.length;
+          if (space > 0) {
+            this.gen_inst(
+              Op.DOT_PSEUDO,
+              None,
+              None,
+              None,
+              space,
+              Pseudo(".space", space),
+              space,
+            );
+          }
+
+          return type.size;
+        }
+
+        define_obj_ip(fnametok, ip) {
+          myassert(this.object_ip.define(fnametok.val, ip) == true);
+        }
+
+        resolve_obj_ip(fnametok) {
+          const ip = this.object_ip.resolve(fnametok.val);
+          myassert(
+            ip != None,
+            error_token(fnametok, `${fnametok.val} ip not found`),
+          );
+          return ip;
+        }
+
+        gen_func(nd) {
+          if (nd.data.name.val == "main") this.main_ip = this.ip;
+          const stack_size = nd.data.stack_size;
+          this.define_obj_ip(nd.data.name, this.ip);
+          // prolog
+          this.gen_label(nd.data.name.val);
+          this.gen_inst(Op.ADDI_D, SP, SP, None, -stack_size);
+          this.gen_inst(Op.ST_D, RA, SP, None, stack_size - 8);
+          this.gen_inst(Op.ST_D, FP, SP, None, stack_size - 16);
+          this.gen_inst(Op.ADDI_D, FP, SP, None, stack_size);
+
+          // assign param todo!
+
+          for (let i = 0; i < nd.data.param.length; i++) {
+            this.gen_store(A0 + i, FP, nd.data.param[i]);
+          }
+
+          this.gen_stmt(nd.data.body);
+
+          if (nd.data.name.val == "main") {
+            this.gen_inst(Op.OR, A0, ZERO, ZERO);
+          }
+
+          // set return jump distance
+          for (let r of this.return_ip) {
+            if (nd.data.return_label == r.label) {
+              this.insts[r.ip].set_any(this.ip - r.ip);
+            }
+          }
+          this.gen_label(nd.data.return_label);
+
+          //  epilogue
+          this.gen_inst(Op.LD_D, FP, SP, None, stack_size - 16);
+          this.gen_inst(Op.LD_D, RA, SP, None, stack_size - 8);
+          this.gen_inst(Op.ADDI_D, SP, SP, None, stack_size);
+          this.gen_inst(Op.JIRL, ZERO, RA, None, 0);
+        }
+
+        gen_stmt(nd) {
+          switch (nd.kind) {
+            case NodeKind.ND_FOR:
+              this.gen_for(nd);
+              break;
+
+            case NodeKind.ND_BLOCK:
+              for (let s of nd.data) {
+                this.gen_stmt(s);
+              }
+              break;
+
+            case NodeKind.ND_EXPR_STMT:
+              this.gen_expr(nd.data);
+              break;
+
+            case NodeKind.ND_IF:
+              this.gen_if(nd);
+              break;
+
+            case NodeKind.ND_BREAK:
+              this.break_ip.push({ label: nd.data, ip: this.ip });
+              this.gen_inst(Op.B, None, None, None, 0, nd.data);
+              break;
+
+            case NodeKind.ND_CONTINUE:
+              this.continue_ip.push({ label: nd.data, ip: this.ip });
+              this.gen_inst(Op.B, None, None, None, 0, nd.data);
+              break;
+
+            case NodeKind.ND_RETURN:
+              this.gen_stmt(nd.data.expr);
+              this.return_ip.push({ label: nd.data.label, ip: this.ip });
+              this.gen_inst(Op.B, None, None, None, 0, nd.data.label);
+              break;
+
+            default:
+              console.log(nd);
+              let msg = error_at(
+                nd.loc.src,
+                nd.loc.pos,
+                nd.loc.line_no,
+                nd.loc.filename,
+                `ERROR CODEGEN: Unknown statement: ${nd.kind.toString()}`,
+              );
+              throw new Error(msg);
+          }
+        }
+
+        gen_expr(tree) {
+          switch (tree.kind) {
+            case NodeKind.ND_ADD:
+              this.gen_add(tree);
+              break;
+            case NodeKind.ND_INT:
+              this.gen_int(tree);
+              break;
+            case NodeKind.ND_SUB:
+              this.gen_sub(tree);
+              break;
+            case NodeKind.ND_MUL:
+              this.gen_mul(tree);
+              break;
+            case NodeKind.ND_DIV:
+              this.gen_div(tree);
+              break;
+            case NodeKind.ND_MOD:
+              this.gen_mod(tree);
+              break;
+            case NodeKind.ND_GT:
+              this.gen_lt(tree.data[1], tree.data[0]);
+              break;
+            case NodeKind.ND_LT:
+              this.gen_lt(tree.data[0], tree.data[1]);
+              break;
+            case NodeKind.ND_GE:
+              this.gen_lt(tree.data[0], tree.data[1]);
+              this.gen_inst(Op.SLTUI, A0, A0, None, 1);
+              break;
+            case NodeKind.ND_LE:
+              this.gen_lt(tree.data[1], tree.data[0]);
+              this.gen_inst(Op.SLTUI, A0, A0, None, 1);
+              break;
+
+            case NodeKind.ND_EQ:
+              this.gen_neq(tree);
+              this.gen_inst(Op.SLTUI, A0, A0, None, 1);
+              break;
+
+            case NodeKind.ND_NE:
+              this.gen_neq(tree);
+              break;
+
+            case NodeKind.ND_LOGAND:
+              this.gen_logand(tree);
+              break;
+
+            case NodeKind.ND_LOGOR:
+              this.gen_logor(tree);
+              break;
+
+            case NodeKind.ND_CONDITIONAL:
+              this.gen_conditional(tree);
+              break;
+
+            case NodeKind.ND_ASSIGN:
+              this.gen_assign(tree);
+              break;
+
+            case NodeKind.ND_VAR:
+              this.gen_addr(tree);
+              this.gen_load(tree.type, A0, A0, 0, tree.loc);
+              break;
+
+            case NodeKind.ND_ADDR:
+              this.gen_addr(tree.data);
+              break;
+
+            case NodeKind.ND_DEREF:
+              this.gen_expr(tree.data);
+              this.gen_load(tree.type, A0, A0, 0, tree.loc);
+              break;
+
+            case NodeKind.ND_FUNCALL:
+              this.gen_funcall(tree);
+              break;
+
+            case NodeKind.ND_NOT:
+              this.gen_expr(tree.data);
+              this.gen_not(A0, A0);
+              break;
+
+            case NodeKind.ND_NEG:
+              this.gen_expr(tree.data);
+              this.gen_neg(A0, A0);
+              break;
+
+            case NodeKind.ND_STRUCT_REF:
+              this.gen_addr(tree);
+              this.gen_load(tree.data[1].type, A0, A0, 0, tree.loc);
+              break;
+
+            default:
+              console.log(tree);
+              let msg = error_at(
+                tree.loc.src,
+                tree.loc.pos,
+                tree.loc.line_no,
+                tree.loc.filename,
+                `ERROR CODEGEN: Unknown expr: ${tree.kind.toString()}`,
+              );
+              throw new Error(msg);
+          }
+        }
+
+        gen_neg(d, k) {
+          this.gen_inst(Op.SUB_D, d, ZERO, k);
+        }
+
+        gen_not(d, j) {
+          this.gen_inst(Op.SLTUI, d, j, None, 1);
+        }
+
+        gen_funcall(nd) {
+          let i = nd.data.arg.length - 1;
+          if (i > 8) {
+            throw new Error(
+              error_token(nd.loc, `unsupported number of arguments ${i} > 8`),
+            );
+          }
+
+          for (; i >= 0; i--) {
+            this.gen_expr(nd.data.arg[i]);
+            this.push();
+          }
+
+          for (let j = 0; j < nd.data.arg.length; j++) {
+            this.pop(A0 + j);
+          }
+
+          const fip = this.resolve_obj_ip(nd.data.func.data.name);
+          this.gen_inst(
+            Op.BL,
+            None,
+            None,
+            None,
+            -(this.ip - fip),
+            nd.data.func.data.name.val,
+          );
+        }
+
+        gen_assign(nd) {
+          this.gen_addr(nd.data[0]);
+          this.push();
+          this.gen_expr(nd.data[1]);
+          this.pop(A1);
+          this.gen_inst(Op.ST_D, A0, A1, None, 0);
+        }
+
+        gen_load(type, d, j, i, loc) {
+          if (type.kind == TypeKind.TY_ARRAY) return;
+
+          switch (type.size) {
+            case 1:
+              this.gen_inst(Op.LD_B, d, j, None, i);
+              return;
+            case 4:
+              this.gen_inst(Op.LD_W, d, j, None, i);
+              return;
+            case 8:
+              this.gen_inst(Op.LD_D, d, j, None, i);
+              return;
+          }
+
+          let msg = error_token(loc, "can not load");
+          throw new Error(msg);
+        }
+
+        gen_store(d, j, nd) {
+          switch (nd.type.size) {
+            case 1:
+              this.gen_inst(Op.ST_B, d, j, None, nd.data.offset);
+              return;
+            case 4:
+              this.gen_inst(Op.ST_W, d, j, None, nd.data.offset);
+              return;
+            case 8:
+              this.gen_inst(Op.ST_D, d, j, None, nd.data.offset);
+              return;
+          }
+
+          let msg = error_token(nd.loc, "can not store");
+          throw new Error(msg);
+        }
+
+        gen_addr(nd) {
+          switch (nd.kind) {
+            case NodeKind.ND_VAR:
+              if (nd.data.is_global) {
+                const ip = -(this.ip - this.resolve_obj_ip(nd.data.name));
+                this.gen_inst(Op.PCADDI, A0, None, None, ip, nd.data.name.val);
+
+                // todo!
+                // this.gen_inst(
+                //   Op.PCADDU12I,
+                //   A0,
+                //   None,
+                //   None,
+                //   int32_le_exact(ip, 31, 12),
+                //   nd.data.name.val,
+                // );
+                // this.gen_inst(Op.ADDI_D, A0, A0, None, int32_le_exact(ip, 11, 0));
+                return;
+              }
+              this.gen_inst(Op.ADDI_D, A0, FP, None, nd.data.offset);
+              return;
+
+            case NodeKind.ND_DEREF:
+              this.gen_expr(nd.data);
+              return;
+
+            case NodeKind.ND_STRUCT_REF:
+              this.gen_addr(nd.data[0]);
+              this.gen_inst(Op.ADDI_D, A0, A0, None, nd.data[1].data.offset);
+              return;
+          }
+
+          throw new Error(error_token(nd.loc, "not an lvalue"));
+        }
+
+        // jump if false
+        gen_cond_jmp(nd, lbelse) {
+          // l < r
+          if (nd.kind == NodeKind.ND_LT) {
+            this.gen_binary(nd.data[0], nd.data[1]);
+            const bip = this.ip;
+            this.gen_inst(Op.BGE, A1, A0, None, None, lbelse);
+            return bip;
+          }
+
+          // l > r -> r < l
+          if (nd.kind == NodeKind.ND_GT) {
+            this.gen_binary(nd.data[0], nd.data[1]);
+            const bip = this.ip;
+            this.gen_inst(Op.BGE, A0, A1, None, None, lbelse);
+            return bip;
+          }
+
+          // l <= r -> !(r < l)
+          if (nd.kind == NodeKind.ND_LE) {
+            this.gen_binary(nd.data[0], nd.data[1]);
+            const bip = this.ip;
+            this.gen_inst(Op.BLT, A0, A1, None, None, lbelse);
+            return bip;
+          }
+
+          // l >= r -> !(l < r)
+          if (nd.kind == NodeKind.ND_GE) {
+            this.gen_binary(nd.data[0], nd.data[1]);
+            const bip = this.ip;
+            this.gen_inst(Op.BLT, A1, A0, None, None, lbelse);
+            return bip;
+          }
+
+          if (nd.kind == NodeKind.ND_NE) {
+            this.gen_binary(nd.data[0], nd.data[1]);
+            const bip = this.ip;
+            this.gen_inst(Op.BEQ, A1, A0, None, None, lbelse);
+            return bip;
+          }
+
+          if (nd.kind == NodeKind.ND_EQ) {
+            this.gen_binary(nd.data[0], nd.data[1]);
+            const bip = this.ip;
+            this.gen_inst(Op.BNE, A1, A0, None, None, lbelse);
+            return bip;
+          }
+
+          // other
+          this.gen_expr(nd);
+          const bip = this.ip;
+          this.gen_inst(Op.BEQZ, None, A0, None, None, lbelse);
+          return bip;
+        }
+
+        // lhs->A0, rhs->A1
+        gen_binary(lhs, rhs) {
+          this.gen_expr(rhs);
+          this.push();
+          this.gen_expr(lhs);
+          this.pop(A1);
+        }
+
+        gen_conditional(nd) {
+          const lbelse = uniq_str(".L.else");
+          const bip = this.gen_cond_jmp(nd.data[0], lbelse);
+
+          // then
+          this.gen_expr(nd.data[1]);
+          const after_then_ip = this.ip;
+          const lbend = uniq_str(".L.end");
+          this.gen_inst(Op.B, None, None, None, 0, lbend);
+
+          // else
+          this.insts[bip].set_any(this.ip - bip - 1);
+          this.gen_label(lbelse);
+          this.gen_expr(nd.data[2]);
+
+          // end
+          this.insts[after_then_ip].set_any(this.ip - after_then_ip);
+          this.gen_label(lbend);
+        }
+
+        gen_for(nd) {
+          this.gen_stmt(nd.data.init);
+
+          const lbstart = nd.data.continue_label;
+          const loop_start_ip = this.ip;
+          this.gen_label(lbstart);
+
+          // cond
+          const lbend = nd.data.break_label;
+          let bip;
+          if (nd.data.cond != None) {
+            bip = this.gen_cond_jmp(nd.data.cond, lbend);
+          }
+
+          // body
+          this.gen_stmt(nd.data.body);
+
+          // incr
+          if (nd.data.incr != None) {
+            this.gen_expr(nd.data.incr);
+          }
+
+          // jump to start
+          this.gen_inst(
+            Op.B,
+            None,
+            None,
+            None,
+            loop_start_ip - this.ip,
+            lbstart,
+          );
+
+          // break
+          // end
+          if (nd.data.cond != None) {
+            this.insts[bip].set_any(this.ip - bip);
+          }
+
+          for (let brk of this.break_ip) {
+            if (lbend == brk.label) {
+              this.insts[brk.ip].set_any(this.ip - brk.ip);
+            }
+          }
+          this.gen_label(lbend);
+
+          // set continue jmp distance
+          for (let c of this.continue_ip) {
+            if (lbstart == c.label) {
+              this.insts[c.ip].set_any(loop_start_ip - c.ip);
+            }
+          }
+        }
+
+        gen_if(nd) {
+          const lbelse = uniq_str(".L.else");
+          const bip = this.gen_cond_jmp(nd.data.cond, lbelse);
+
+          // then
+          this.gen_stmt(nd.data.then);
+          const after_then_ip = this.ip;
+          const lbend = uniq_str(".L.end");
+          this.gen_inst(Op.B, None, None, None, 0, lbend);
+
+          // else
+          this.insts[bip].set_any(this.ip - bip - 1);
+          this.gen_label(lbelse);
+          if (nd.data.els != None) {
+            this.gen_stmt(nd.data.els);
+          }
+
+          // end
+          this.insts[after_then_ip].set_any(this.ip - after_then_ip);
+          this.gen_label(lbend);
+        }
+
+        gen_logand(nd) {
+          this.gen_expr(nd.data[0]);
+          const beqz_ip = this.ip;
+          const jlabel = uniq_str();
+          this.gen_inst(Op.BEQZ, None, A0, None, 0, jlabel);
+
+          // GR[A0] != 0
+          this.gen_expr(nd.data[1]);
+          this.insts[beqz_ip].set_any(this.ip - beqz_ip - 1);
+          this.gen_label(jlabel);
+        }
+
+        gen_logor(nd) {
+          this.gen_expr(nd.data[0]);
+          const bnez_ip = this.ip;
+          const jlabel = uniq_str();
+          this.gen_inst(Op.BNEZ, None, A0, None, 0, jlabel);
+
+          // GR[A0] == 0
+          this.gen_expr(nd.data[1]);
+          this.insts[bnez_ip].set_any(this.ip - bnez_ip - 1);
+          this.gen_label(jlabel);
+        }
+
+        gen_label(lstr) {
+          this.gen_inst(Op.LABEL, None, None, None, None, String(`${lstr}:`));
+        }
+
+        gen_neq(nd) {
+          this.gen_binary(nd.data[0], nd.data[1]);
+          this.gen_inst(Op.XOR, A0, A0, A1, None);
+        }
+
+        gen_lt(lhs, rhs) {
+          this.gen_binary(lhs, rhs);
+          this.gen_inst(Op.SLT, A0, A0, A1, None);
+        }
+
+        gen_int(nd) {
+          // 8 bits
+          if (nd.type.kind == TypeKind.TY_CHAR) {
+            this.gen_inst(Op.ORI, A0, ZERO, None, nd.data);
+            return;
+          }
+
+          // 64 bits
+          if (nd.type.kind == TypeKind.TY_LONG) {
+            this.gen_inst(
+              Op.LU12I_W,
+              A0,
+              None,
+              None,
+              int64_le_exact(nd.data, 31, 12),
+            );
+            this.gen_inst(Op.ORI, A0, A0, None, int64_le_exact(nd.data, 11, 0));
+            this.gen_inst(
+              Op.LU32I_D,
+              A0,
+              None,
+              None,
+              int64_le_exact(nd.data, 51, 32),
+            );
+            this.gen_inst(
+              Op.LU52I_D,
+              A0,
+              A0,
+              None,
+              int64_le_exact(nd.data, 63, 52),
+            );
+            return;
+          }
+
+          // 32 bits
+          this.gen_inst(
+            Op.LU12I_W,
+            A0,
+            None,
+            None,
+            int64_le_exact(nd.data, 31, 12),
+          );
+          this.gen_inst(Op.ORI, A0, A0, None, int64_le_exact(nd.data, 11, 0));
+        }
+
+        gen_add(nd) {
+          this.gen_binary(nd.data[0], nd.data[1]);
+          if (nd.type.kind == TypeKind.TY_INT) {
+            this.gen_inst(Op.ADD_W, A0, A0, A1, None);
+            return;
+          }
+          this.gen_inst(Op.ADD_D, A0, A0, A1, None);
+        }
+
+        gen_sub(nd) {
+          this.gen_binary(nd.data[0], nd.data[1]);
+          if (nd.type.kind == TypeKind.TY_INT) {
+            this.gen_inst(Op.SUB_W, A0, A0, A1, None);
+            return;
+          }
+          this.gen_inst(Op.SUB_D, A0, A0, A1, None);
+        }
+
+        gen_mul(nd) {
+          this.gen_binary(nd.data[0], nd.data[1]);
+          if (nd.type.kind == TypeKind.TY_INT) {
+            this.gen_inst(Op.MUL_W, A0, A0, A1, None);
+            return;
+          }
+          this.gen_inst(Op.MUL_D, A0, A1, A0, None);
+        }
+
+        gen_div(nd) {
+          this.gen_binary(nd.data[0], nd.data[1]);
+          if (nd.type.kind == TypeKind.TY_INT) {
+            this.gen_inst(Op.DIV_W, A0, A0, A1, None);
+            return;
+          }
+          this.gen_inst(Op.DIV_D, A0, A0, A1, None);
+        }
+
+        gen_mod(nd) {
+          this.gen_binary(nd.data[0], nd.data[1]);
+          if (nd.type.kind == TypeKind.TY_INT) {
+            this.gen_inst(Op.MOD_W, A0, A0, A1, None);
+            return;
+          }
+          this.gen_inst(Op.MOD_D, A0, A0, A1, None);
+        }
+
+        gen_inst(op, d, j, k, any, label, incr = INS_SIZE) {
+          this.insts[this.ip] = new Instruction(op, d, j, k, any, label);
+          this.ip += incr;
+        }
+
+        push() {
+          this.gen_inst(Op.ADDI_D, SP, SP, None, -8, None);
+          this.gen_inst(Op.ST_D, A0, SP, None, 0, None);
+        }
+
+        pop(reg) {
+          this.gen_inst(Op.LD_D, reg, SP, None, 0, None);
+          this.gen_inst(Op.ADDI_D, SP, SP, None, 8, None);
+        }
+      }
+
+      function codegen(ast) {
+        let c = new Compiler();
+        return c.codegen(ast);
+      }
+
+      ///////////////
+      // part 4 vm //
+      ///////////////
+      const BYTE = 8;
+      const WORD = BYTE * 4;
+      const DOUBLEWORD = WORD * 2;
+      const HALFWORD = WORD / 2;
+
+      function number_to_64bits(num, isLittleEndian = true) {
+        const buffer = new ArrayBuffer(8);
+        const view = new DataView(buffer);
+        view.setBigUint64(0, BigInt(num), isLittleEndian); // 默认小端序
+        return new Uint8Array(buffer);
+      }
+
+      function bytes_to_number(bytes, isLittleEndian = true) {
+        const buffer = bytes.buffer || new Uint8Array(bytes).buffer;
+        const view = new DataView(buffer);
+        return view.getBigUint64(0, isLittleEndian);
+      }
+
+      function zero_extend(n, bits) {
+        myassert(bits <= 63);
+        return BigInt.asUintN(bits, BigInt(n));
+      }
+
+      function sign_extend(n, bits) {
+        myassert(bits <= 63);
+        return BigInt.asIntN(bits, BigInt(n));
+      }
+
+      // eg: int32_exact(0b11101011 00000000 00000000 00000000, 0, 3)  -> 0b111
+      function int32_exact(n, start, len) {
+        myassert(0 <= start && start <= 31 && start + len <= 32 && len > 0);
+        let mask = (1 << len) - 1;
+        return mask & (n >>> (32 - start - len));
+      }
+
+      function int32_le_exact(n, high, low) {
+        let start = 31 - high;
+        let len = high - low + 1;
+        return int32_exact(n, start, len);
+      }
+
+      // bigint
+      function int64_exact(n, start, len) {
+        myassert(0 <= start && start <= 63 && start + len <= 64 && len > 0);
+        let mask = (BigInt(1) << BigInt(len)) - 1n;
+        let big = mask & (BigInt(n) >> BigInt(64 - start - len));
+        return BigInt.asUintN(len, big);
+      }
+
+      function int64_le_exact(n, high, low) {
+        let start = 63 - high;
+        let len = high - low + 1;
+        return int64_exact(n, start, len);
+      }
+
+      // bigint to 32bits number
+      function int64_half_part(n, h) {
+        if (h) {
+          return (BigInt(n) >> 32n) & 0xffffffffn;
+        }
+        return BigInt(n) & 0xffffffffn;
+      }
+
+      function sll(n, bits) {
+        if (bits == 0) {
+          return n;
+        }
+        return n << bits;
+      }
+
+      function srl(n, bits) {
+        if (bits == 0) {
+          return n;
+        }
+        let mask = (1 << bits) - 1;
+        return (n >> bits) & mask;
+        // return Number(BigInt(n) >>> BigInt(bits));
+        // return n >>> bits;
+      }
+
+      function sra32(n, bits) {
+        if (bits == 0) {
+          return n;
+        }
+        let mask = 1 << 31;
+        return (n >> bits) | (n & mask);
+        // return n >> bits;
+      }
+
+      function sra64(n, bits) {
+        if (bits == 0) {
+          return n;
+        }
+
+        return BigInt(n) >> BigInt(bits);
+      }
+
+      const log2 = Math.log2;
+      const printf = console.log;
+
+      class Mem {
+        constructor(size) {
+          // this._mem = Array(size).fill(0);
+          this._mem = Array(size);
+          this.cap = size;
+        }
+
+        set(data, addr, len) {
+          // this._mem[addr] = BigInt.asUintN(len, data);
+          this._mem[addr] = data;
+        }
+
+        get(addr, len) {
+          const v = this._mem[addr];
+          // if (v == 0) return 0n;
+          // return BigInt.asUintN(len, v);
+          return v;
+        }
+      }
+
+      const INS_SIZE = 1;
+
+      class VM {
+        constructor(size, debug = false) {
+          this.GR = Array(32).fill(0n);
+          this.PC = 0n;
+          this.on = false;
+          this.mem = new Mem(size);
+          this.GR[FP] = BigInt(this.mem.cap - 1);
+          this.GR[SP] = BigInt(this.mem.cap - 1);
+          this.debug = debug;
+          this.prog_start = 64;
+        }
+
+        store_mem(data, addr, len) {
+          this.mem.set(data, addr, len);
+        }
+
+        load_mem(addr, len) {
+          return BigInt.asIntN(len, BigInt(this.mem.get(addr, len)));
+        }
+
+        read_code(insts) {
+          const addr_start = this.prog_start;
+          const trueins = insts.instructions;
+          for (let i = addr_start; i < insts.metainfo.data_size; i++) {
+            this.mem.set(0, i, 1);
+          }
+
+          let addr = addr_start;
+          for (let ins of trueins) {
+            if (ins == undefined) continue;
+            if (ins.op() == Op.DOT_PSEUDO) {
+              const ps = ins.label();
+              let data = ins.any();
+              if (ps.name == ".space") data = 0;
+              this.mem.set(data, addr, ps.size);
+              addr += ps.size;
+            } else {
+              this.mem._mem[addr] = ins;
+              addr += 1;
+            }
+          }
+
+          this.GR[RA] = BigInt(addr);
+          this.set_pc(BigInt(addr_start + insts.metainfo.main_ip));
+          return addr;
+        }
+
+        run(insts) {
+          if (insts.metainfo.main_ip == None) {
+            throw new Error("no main function");
+          }
+
+          const addr_end = this.read_code(insts);
+
+          this.on = true;
+
+          while (this.on) {
+            if (this.pc() >= addr_end) break;
+            let i = this.mem._mem[this.pc()];
+            this.run_one(i);
+            let op = i.op();
+            if (op == Op.BL || op == Op.B || op == Op.JIRL) continue;
+            this.incr_pc();
+          }
+
+          return this.GR[A0];
+        }
+
+        run_one(i) {
+          if (this.debug) {
+            console.log(
+              `a0=${this.GR[A0]}, a1=${this.GR[A1]}, sp=${this.GR[SP]}, fp=${
+                this.GR[FP]
+              }, ra=${this.GR[RA]}, pc=${this.pc()}`,
+            );
+            console.log(i.to_str());
+          }
+
+          if (i.op() == Op.LABEL) return;
+
+          switch (i.op()) {
+            // ori rd, rj, ui12
+            case Op.ORI:
+              this.GR[i.d()] = this.GR[i.j()] | zero_extend(i.any(), 12);
+              break;
+
+            // addi.w rd, rj, si12
+            case Op.ADDI_W:
+              this.GR[i.d()] = sign_extend(
+                int64_half_part(this.GR[i.j()], 0) + sign_extend(i.any(), 12),
+                32,
+              );
+              break;
+
+            // addi.d rd, rj, si12
+            case Op.ADDI_D:
+              this.GR[i.d()] = this.GR[i.j()] + sign_extend(i.any(), 12);
+              // console.log(this.GR[i.d()], sign_extend(i.any(), 12), i.j());
+              break;
+
+            // lu12i.w rd, si20
+            case Op.LU12I_W:
+              this.GR[i.d()] = sign_extend(i.any() << 12n, 32);
+              break;
+
+            // lu32i.d rd, si20
+            case Op.LU32I_D: {
+              this.GR[i.d()] =
+                (sign_extend(i.any(), 20) << 32n) |
+                int64_le_exact(this.GR[i.d()], 31, 0);
+
+              break;
+            }
+
+            // lu52i.d rd, rj, si12
+            case Op.LU52I_D: {
+              this.GR[i.d()] =
+                (sign_extend(i.any(), 12) << 52n) |
+                int64_le_exact(this.GR[i.j()], 51, 0);
+
+              break;
+            }
+
+            // add.w rd, rj, rk
+            case Op.ADD_W: {
+              this.GR[i.d()] = sign_extend(
+                int64_half_part(this.GR[i.j()], 0) +
+                  int64_half_part(this.GR[i.k()], 0),
+                32,
+              );
+              break;
+            }
+
+            // add.d rd, rj, rk
+            case Op.ADD_D:
+              this.GR[i.d()] = this.GR[i.j()] + this.GR[i.k()];
+              break;
+
+            case Op.SUB_W:
+              this.GR[i.d()] = sign_extend(
+                int64_half_part(this.GR[i.j()], 0) -
+                  int64_half_part(this.GR[i.k()], 0),
+                32,
+              );
+              break;
+
+            case Op.SUB_D:
+              this.GR[i.d()] = this.GR[i.j()] - this.GR[i.k()];
+              break;
+
+            case Op.MUL_W:
+              this.GR[i.d()] = sign_extend(
+                int64_half_part(this.GR[i.j()], 0) *
+                  int64_half_part(this.GR[i.k()], 0),
+                32,
+              );
+              break;
+
+            case Op.MULW_D_W: {
+              let product =
+                int64_half_part(this.GR[i.j()], 0) *
+                int64_half_part(this.GR[i.k()], 0);
+              this.GR[i.d()] = product;
+              break;
+            }
+
+            case Op.MULW_D_WU: {
+              let product =
+                int64_half_part(this.GR[i.j()], 0) *
+                int64_half_part(this.GR[i.k()], 0);
+              this.GR[i.d()] = product;
+              break;
+            }
+
+            case Op.MULH_W:
+              this.GR[i.d()] = sign_extend(
+                int64_le_exact(
+                  int64_half_part(this.GR[i.j()], 0) *
+                    int64_half_part(this.GR[i.k()], 0),
+                  63,
+                  32,
+                ),
+                32,
+              );
+              break;
+
+            case Op.MULH_WU:
+              this.GR[i.d()] = sign_extend(
+                int64_le_exact(
+                  int64_half_part(this.GR[i.j()], 0) *
+                    int64_half_part(this.GR[i.k()], 0),
+                  63,
+                  32,
+                ),
+                32,
+              );
+              break;
+
+            case Op.MUL_D:
+              this.GR[i.d()] = this.GR[i.j()] * this.GR[i.k()];
+              break;
+
+            case Op.DIV_W:
+              this.GR[i.d()] = sign_extend(
+                int64_half_part(this.GR[i.j()], 0) /
+                  int64_half_part(this.GR[i.k()], 0),
+                32,
+              );
+              break;
+
+            case Op.DIV_WU:
+              this.GR[i.d()] = sign_extend(
+                int64_half_part(this.GR[i.j()], 0) /
+                  int64_half_part(this.GR[i.k()], 0),
+                32,
+              );
+              break;
+
+            case Op.DIV_D:
+              this.GR[i.d()] = this.GR[i.j()] / this.GR[i.k()];
+              break;
+
+            case Op.DIV_DU:
+              this.GR[i.d()] = this.GR[i.j()] / this.GR[i.k()];
+              break;
+
+            case Op.MOD_W:
+              this.GR[i.d()] = sign_extend(
+                int64_half_part(this.GR[i.j()], 0) %
+                  int64_half_part(this.GR[i.k()], 0),
+                32,
+              );
+              break;
+
+            case Op.MOD_WU:
+              this.GR[i.d()] = sign_extend(
+                int64_half_part(this.GR[i.j()], 0) %
+                  int64_half_part(this.GR[i.k()], 0),
+                32,
+              );
+              break;
+
+            case Op.MOD_D:
+              this.GR[i.d()] = this.GR[i.j()] % this.GR[i.k()];
+              break;
+
+            case Op.MOD_DU:
+              this.GR[i.d()] = this.GR[i.j()] % this.GR[i.k()];
+              break;
+
+            // ld.d rd, rj, si12
+            case Op.LD_D: {
+              let addr = this.GR[i.j()] + sign_extend(i.any(), 12);
+              this.GR[i.d()] = this.load_mem(addr, DOUBLEWORD);
+              break;
+            }
+
+            // st.d rd, rj, si12
+            case Op.ST_D: {
+              let addr = this.GR[i.j()] + sign_extend(i.any(), 12);
+              this.store_mem(this.GR[i.d()], addr, DOUBLEWORD);
+              break;
+            }
+
+            // ld.w rd, rj, si12
+            case Op.LD_W: {
+              let addr = this.GR[i.j()] + sign_extend(i.any(), 12);
+              this.GR[i.d()] = sign_extend(this.load_mem(addr, WORD), WORD);
+              break;
+            }
+
+            // ld.wu rd, rj, si12
+            case Op.LD_WU: {
+              let addr = this.GR[i.j()] + sign_extend(i.any(), 12);
+
+              this.GR[i.d()] = zero_extend(this.load_mem(addr, WORD), WORD);
+              break;
+            }
+
+            // st.w rd, rj, si12
+            case Op.ST_W: {
+              let addr = this.GR[i.j()] + sign_extend(i.any(), 12);
+              this.store_mem(this.GR[i.d()], addr, WORD);
+              break;
+            }
+
+            // ld.h rd, rj, si12
+            case Op.LD_H: {
+              let addr = this.GR[i.j()] + sign_extend(i.any(), 12);
+              this.GR[i.d()] = sign_extend(
+                this.load_mem(addr, HALFWORD),
+                HALFWORD,
+              );
+              break;
+            }
+
+            // ld.hu rd, rj, si12
+            case Op.LD_HU: {
+              let addr = this.GR[i.j()] + sign_extend(i.any(), 12);
+              this.GR[i.d()] = zero_extend(
+                this.load_mem(addr, HALFWORD),
+                HALFWORD,
+              );
+              break;
+            }
+
+            // st.b rd, rj, si12
+            case Op.ST_H: {
+              let addr = this.GR[i.j()] + sign_extend(i.any(), 12);
+              this.store_mem(this.GR[i.d()], addr, HALFWORD);
+              break;
+            }
+
+            // ld.b rd, rj, si12
+            case Op.LD_B: {
+              let addr = this.GR[i.j()] + sign_extend(i.any(), 12);
+              this.GR[i.d()] = sign_extend(this.load_mem(addr, BYTE), BYTE);
+              break;
+            }
+
+            // ld.b rd, rj, si12
+            case Op.LD_BU: {
+              let addr = this.GR[i.j()] + sign_extend(i.any(), 12);
+              this.GR[i.d()] = zero_extend(this.load_mem(addr, BYTE), BYTE);
+              break;
+            }
+
+            // st.b rd, rj, si12
+            case Op.ST_B: {
+              let addr = this.GR[i.j()] + sign_extend(i.any(), 12);
+              this.store_mem(this.GR[i.d()], addr, BYTE);
+              break;
+            }
+
+            case Op.SLTUI: {
+              let tmp = sign_extend(i.any(), 12);
+              this.GR[i.d()] = this.GR[i.j()] < tmp ? 1 : 0;
+              break;
+            }
+
+            case Op.SLTU:
+              this.GR[i.d()] = this.GR[i.j()] < this.GR[i.k()] ? 1 : 0;
+              break;
+
+            case Op.SLT:
+              this.GR[i.d()] = this.GR[i.j()] < this.GR[i.k()] ? 1 : 0;
+              break;
+
+            case Op.XOR: // 同为0, 异为1
+              this.GR[i.d()] = this.GR[i.j()] ^ this.GR[i.k()];
+              break;
+
+            case Op.OR:
+              this.GR[i.d()] = this.GR[i.j()] | this.GR[i.k()];
+              break;
+
+            case Op.BEQZ:
+              if (this.GR[i.j()] == 0) {
+                this.set_pc(
+                  this.pc() +
+                    sign_extend(i.any() * INS_SIZE, 21 + log2(INS_SIZE)),
+                );
+              }
+              break;
+
+            case Op.BNEZ:
+              if (this.GR[i.j()] != 0) {
+                this.set_pc(
+                  this.pc() +
+                    sign_extend(i.any() * INS_SIZE, 21 + log2(INS_SIZE)),
+                );
+              }
+              break;
+
+            // beq rj, rd, s16
+            case Op.BEQ:
+              if (this.GR[i.j()] == this.GR[i.d()]) {
+                this.set_pc(
+                  this.pc() +
+                    sign_extend(i.any() * INS_SIZE, 16 + log2(INS_SIZE)),
+                );
+              }
+              break;
+
+            // bne rj, rd, s16
+            case Op.BNE:
+              if (this.GR[i.j()] != this.GR[i.d()]) {
+                this.set_pc(
+                  this.pc() +
+                    sign_extend(i.any() * INS_SIZE, 16 + log2(INS_SIZE)),
+                );
+              }
+              break;
+
+            case Op.B:
+              this.set_pc(
+                this.pc() +
+                  sign_extend(i.any() * INS_SIZE, 26 + log2(INS_SIZE)),
+              );
+
+              break;
+
+            case Op.BL:
+              this.GR[RA] = this.pc() + BigInt(INS_SIZE);
+              this.set_pc(
+                this.pc() +
+                  sign_extend(i.any() * INS_SIZE, 26 + log2(INS_SIZE)),
+              );
+              break;
+
+            // blt rj rd offs16
+            case Op.BLT:
+              if (this.GR[i.j()] < this.GR[i.d()]) {
+                this.set_pc(
+                  this.pc() +
+                    sign_extend(i.any() * INS_SIZE, 16 + log2(INS_SIZE)),
+                );
+              }
+              break;
+
+            // bge rj rd offs16
+            case Op.BGE:
+              if (this.GR[i.j()] >= this.GR[i.d()]) {
+                this.set_pc(
+                  this.pc() +
+                    sign_extend(i.any() * INS_SIZE, 16 + log2(INS_SIZE)),
+                );
+              }
+              break;
+
+            // bltu rj rd offs16
+            case Op.BLTU:
+              if (this.GR[i.j()] < this.GR[i.d()]) {
+                this.set_pc(
+                  this.pc() +
+                    sign_extend(i.any() * INS_SIZE, 16 + log2(INS_SIZE)),
+                );
+              }
+              break;
+
+            // bgeu rj rd offs16
+            case Op.BGEU:
+              if (this.GR[i.j()] >= this.GR[i.d()]) {
+                this.set_pc(
+                  this.pc() +
+                    sign_extend(i.any() * INS_SIZE, 16 + log2(INS_SIZE)),
+                );
+              }
+              break;
+
+            case Op.JIRL:
+              if (i.d() != ZERO) {
+                this.GR[i.d()] = this.pc() + INS_SIZE;
+              }
+              this.set_pc(
+                this.GR[i.j()] +
+                  sign_extend(i.any() * INS_SIZE, 16 + log2(INS_SIZE)),
+              );
+              break;
+
+            // syscall
+            case Op.PRTF: {
+              // let addr = Array(8);
+              // let j = i.any() - 1;
+              // for (let i = 0; i < i.any(); i++, j--) {
+              //   if (this.GR[T0 + j] == 1) {
+              //     addr[i] = this.mem._mem + this.GR[A0 + i];
+              //   } else {
+              //     addr[i] = this.GR[A0 + i];
+              //   }
+              // }
+
+              // this.GR[A0] = printf(
+              //   this.mem._mem + this.GR[A0],
+              //   addr[1],
+              //   addr[2],
+              //   addr[3],
+              //   addr[4],
+              //   addr[5],
+              //   addr[6],
+              //   addr[7],
+              // );
+              console.log("todo!");
+              break;
+            }
+
+            case Op.EXT_W_B:
+              this.GR[i.d()] = sign_extend(this.GR[i.j()], BYTE);
+              break;
+
+            case Op.EXT_W_H: {
+              this.GR[i.d()] = sign_extend(this.GR[i.j()], HALFWORD);
+              break;
+            }
+
+            case Op.BYTEPICK_W: {
+              let tmp = (this.GR[i.k()] << 32) | (this.GR[i.j()] & 0xffffffff);
+              this.GR[i.d()] = sign_extend(
+                int64_le_exact(tmp, 8 * (8 - i.any()) - 1, 8 * (4 - i.any())),
+                32,
+              );
+              break;
+            }
+
+            case Op.BSTRPICK_D: {
+              this.GR[i.d()] = zero_extend(
+                int64_le_exact(this.GR[i.j()], i.k(), i.any()),
+                i.k() - i.any() + 1,
+              );
+              break;
+            }
+
+            case Op.NOR:
+              this.GR[i.d()] = ~(this.GR[i.j()] | this.GR[i.k()]);
+              break;
+
+            case Op.AND:
+              this.GR[i.d()] = this.GR[i.j()] & this.GR[i.k()];
+              break;
+
+            case Op.SLL_W:
+              this.GR[i.d()] = sign_extend(
+                sll(
+                  int64_le_exact(this.GR[i.j()], 31, 0),
+                  int64_le_exact(this.GR[i.k()], 4, 0),
+                ),
+                32,
+              );
+              break;
+
+            case Op.SLL_D:
+              this.GR[i.d()] = sll(
+                this.GR[i.j()],
+                int64_le_exact(this.GR[i.k()], 5, 0),
+              );
+              break;
+
+            case Op.SRL_W:
+              this.GR[i.d()] = sign_extend(
+                srl(
+                  int64_le_exact(this.GR[i.j()], 31, 0),
+                  int64_le_exact(this.GR[i.k()], 4, 0),
+                ),
+                32,
+              );
+              break;
+
+            case Op.SRL_D:
+              this.GR[i.d()] = srl(
+                this.GR[i.j()],
+                int64_le_exact(this.GR[i.k()], 5, 0),
+              );
+              break;
+
+            case Op.SRA_W:
+              this.GR[i.d()] = sign_extend(
+                sra32(
+                  int64_le_exact(this.GR[i.j()], 31, 0),
+                  int64_le_exact(this.GR[i.k()], 4, 0),
+                ),
+                32,
+              );
+              break;
+
+            case Op.SRA_D:
+              this.GR[i.d()] = sra64(
+                this.GR[i.j()],
+                int64_le_exact(this.GR[i.k()], 5, 0),
+              );
+              break;
+
+            // pcalau12i rd, si20 FIXME!
+            case Op.PCALAU12I:
+              const tmp = this.pc() + sign_extend(i.any() << 12, 32);
+              this.GR[i.d()] = tmp & 0xfffffffffffff000n;
+              break;
+
+            // pcaddi rd, si20
+            case Op.PCADDI:
+              this.GR[i.d()] =
+                this.pc() +
+                sign_extend(i.any() * INS_SIZE, 20 + log2(INS_SIZE));
+              break;
+
+            // pcaddu12i rd, si20
+            case Op.PCADDU12I:
+              this.GR[i.d()] = this.pc() + sign_extend(i.any() << 12, 32);
+              break;
+
+            default:
+              console.log("\nVM RUN ERROR at %d: \n", this.pc());
+              console.log(i);
+              throw new Error("invalid ins");
+          }
+        } // run_one ends
+
+        pc() {
+          return this.PC;
+        }
+
+        set_pc(n) {
+          this.PC = n;
+        }
+
+        incr_pc() {
+          this.PC += BigInt(INS_SIZE);
+        }
+      }
+
+      function eval_src(src) {
+        let insts = codegen(parse(src));
+
+        let vm = new VM((1 << 10) * 4);
+        vm.run(insts);
+        return vm.GR[A0];
+      }
+
+      function compile_to_asm(src) {
+        return codegen(parse(src)).to_format_asm();
+      }
+
+      function codegen_input() {
+        var textarea = document.getElementById("inputarea");
+        var value = textarea.value;
+        let res;
+        try {
+          res = compile_to_asm(value).join("\n");
+        } catch (e) {
+          res = e.toString();
+        }
+        let resarea = document.getElementById("resultarea");
+        resarea.value = res;
+      }
+
+      function eval_input() {
+        var textarea = document.getElementById("inputarea");
+        var value = textarea.value;
+        let res;
+        try {
+          res = String(eval_src(value));
+        } catch (e) {
+          res = String(e);
+        }
+        var resarea = document.getElementById("resultarea");
+        resarea.value = res;
+      }
+
+      function clear_resultarea() {
+        var resarea = document.getElementById("resultarea");
+        resarea.value = "";
+      }
+
+      function clear_inputarea() {
+        var inputarea = document.getElementById("inputarea");
+        inputarea.value = "";
+      }
+
+      // keybindings
+      window.addEventListener("keydown", function (event) {
+        if (event.ctrlKey && event.keyCode == 13) {
+          eval_input();
+        }
+      });
+
+      function copy_to_clipboard(text) {
+        var textarea = document.createElement("textarea");
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+          var successful = document.execCommand("copy");
+        } catch (err) {
+          alert("copy failed", err);
+        } finally {
+          document.body.removeChild(textarea);
+        }
+      }
+
+      function copy_asm() {
+        let text = document.getElementById("resultarea").value;
+        copy_to_clipboard(text);
+      }
+    </script>
+
+    <div class="container">
+      <div class="textarea-container">
+        <div id="input">
+          <button id="runbtn" onclick="eval_input()">Run</button>
+          <button id="codegenbtn" onclick="codegen_input()">CodeGen</button>
+          <button id="clearinputbtn" onclick="clear_inputarea()">Clear</button>
+          <br />
+          <textarea
+            id="inputarea"
+            class="textarea-box"
+            cols="50"
+            rows="40"
+            placeholder="Input C source code here, then press 'ctrl enter' or click 'Run' to run."
+          ></textarea>
+        </div>
+      </div>
+
+      <div class="textarea-container">
+        <button id="copyasmbtn" onclick="copy_asm()">Copy</button>
+        <br />
+        <textarea
+          id="resultarea"
+          class="textarea-box"
+          cols="50"
+          rows="40"
+        ></textarea>
+      </div>
+    </div>
+  </body>
+</html>
