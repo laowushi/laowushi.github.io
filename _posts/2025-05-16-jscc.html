@@ -89,7 +89,7 @@
 
       // TOKEN KIND
       class TokenKind {
-        static TK_END = Symbol("TK_END");
+        static TK_END = Symbol("TK_END"); // EOF
         static TK_INT = Symbol("TK_INT"); // INTEGER NUMBER
         static TK_KW_VOID = Symbol("TK_KW_VOID"); // "char"
         static TK_KW_CHAR = Symbol("TK_KW_CHAR"); // "char"
@@ -108,10 +108,12 @@
         static TK_KW_TYPEDEF = Symbol("TK_KW_TYPEDEF"); // "typedef"
         static TK_KW_SIZEOF = Symbol("TK_KW_SIZEOF"); // "sizeof"
         static TK_KW_STATIC = Symbol("TK_KW_STATIC"); // "static"
-        static TK_KW_SWITCH = Symbol("TK_KW_SWITCH"); // "static"
-        static TK_KW_CASE = Symbol("TK_KW_CASE"); // "static"
-        static TK_KW_DEFAULT = Symbol("TK_KW_DEFAULT"); // "static"
-        static TK_KW_ENUM = Symbol("TK_KW_ENUM"); // "static"
+        static TK_KW_SWITCH = Symbol("TK_KW_SWITCH"); // "switch"
+        static TK_KW_CASE = Symbol("TK_KW_CASE"); // "case"
+        static TK_KW_DEFAULT = Symbol("TK_KW_DEFAULT"); // "default"
+        static TK_KW_ENUM = Symbol("TK_KW_ENUM"); // "enum"
+        static TK_KW_SIGNED = Symbol("TK_KW_SIGNED"); // "signed"
+        static TK_KW_UNSIGNED = Symbol("TK_KW_UNSIGNED"); // "unsigned"
         static TK_IDENT = Symbol("TK_IDENT");
         static TK_STR = Symbol("TK_STR");
         static TK_PLUS = Symbol("+");
@@ -264,11 +266,129 @@
           return this.read_punct();
         }
 
+        read_escape_char() {
+          let charcode = undefined;
+          let ec = this.ch();
+          switch (ec) {
+            case "a": {
+              this.pos += 1;
+              charcode = 7;
+              break;
+            }
+            case "n": {
+              this.pos += 1;
+              charcode = "\n".charCodeAt(0);
+              break;
+            }
+            case "r": {
+              this.pos += 1;
+              charcode = "\r".charCodeAt(0);
+              break;
+            }
+            case "t": {
+              this.pos += 1;
+              charcode = "\t".charCodeAt(0);
+              break;
+            }
+            case "b": {
+              this.pos += 1;
+              charcode = "\b".charCodeAt(0);
+              break;
+            }
+            case "f": {
+              this.pos += 1;
+              charcode = "\f".charCodeAt(0);
+              break;
+            }
+            case "v": {
+              this.pos += 1;
+              charcode = "\v".charCodeAt(0);
+              break;
+            }
+            case "r": {
+              this.pos += 1;
+              charcode = "\r".charCodeAt(0);
+              break;
+            }
+
+            // hex esc char
+            case "x":
+            case "X": {
+              this.pos += 1; // skip x
+              const start = this.pos;
+              while (
+                (is_digit(this.ch()) || is_hex(this.ch())) &&
+                this.ch() != "X" &&
+                this.ch() != "x"
+              ) {
+                this.pos += 1;
+              }
+
+              const hex = Number(`0x${this.src.slice(start, this.pos)}`);
+              if (hex > 0xff) {
+                throw new Error(
+                  error_at(
+                    this.src,
+                    this.pos - 1,
+                    this.line_no,
+                    this.filename,
+                    "hex escape sequence out of range",
+                  ),
+                );
+              }
+
+              charcode = hex;
+              break;
+            }
+
+            default:
+              // octal esc char
+              if ("0" <= ec && ec <= "7") {
+                let n = 0;
+                let oc = this.ch();
+                n = (n << 3) + (oc - "0");
+                this.pos += 1;
+                oc = this.ch();
+                if ("0" <= oc && oc <= "7") {
+                  n = (n << 3) + (oc - "0");
+                  this.pos += 1;
+                  oc = this.ch();
+                  if ("0" <= oc && oc <= "7") {
+                    n = (n << 3) + (oc - "0");
+                    this.pos += 1;
+                    oc = this.ch();
+                  }
+                }
+                charcode = n;
+                break;
+              }
+
+              throw new Error(
+                error_at(
+                  this.src,
+                  this.pos,
+                  this.line_no,
+                  this.filename,
+                  "unsupported escape character",
+                ),
+              );
+          }
+
+          return charcode;
+        }
+
         read_char() {
           const pos = this.pos;
           this.pos += 1;
-          let chcode = this.ch().charCodeAt(0);
-          this.pos += 1;
+          let chcode;
+          if (this.ch() == "\\") {
+            this.pos += 1;
+            chcode = this.read_escape_char();
+          } else {
+            chcode = this.ch().charCodeAt(0);
+            this.pos += 1;
+          }
+
           if (this.ch() != "'") {
             throw new Error(
               error_at(
@@ -283,7 +403,7 @@
           this.pos += 1;
           return new Token(
             TokenKind.TK_INT,
-            chcode,
+            BigInt(chcode),
             pos,
             this.line_no,
             this.src,
@@ -320,7 +440,17 @@
             this.pos += 1;
           }
 
-          let i = this.src.slice(start, this.pos);
+          let nstr = this.src.slice(start, this.pos);
+
+          // octal number
+          if (nstr.length >= 2 && nstr[0] == "0" && !is_hex(nstr[1])) {
+            if (!(nstr[1] == "o" || nstr[1] == "O")) {
+              nstr = String(`0o${nstr.slice(1)}`);
+            }
+          }
+
+          const i = BigInt(nstr);
+
           return new Token(
             TokenKind.TK_INT,
             i,
@@ -573,109 +703,12 @@
               );
             }
 
-            // fixme!
             if (c == "\\") {
               const start = this.pos;
               this.pos += 1;
-              let ec = this.ch();
-
-              switch (ec) {
-                case "n": {
-                  this.pos += 1;
-                  const charcode = "\n".charCodeAt(0);
-                  str.push(charcode);
-                  break;
-                }
-                case "r": {
-                  this.pos += 1;
-                  const charcode = "\r".charCodeAt(0);
-                  str.push(charcode);
-                  break;
-                }
-                case "t": {
-                  this.pos += 1;
-                  const charcode = "\t".charCodeAt(0);
-                  str.push(charcode);
-                  break;
-                }
-                case "b": {
-                  this.pos += 1;
-                  const charcode = "\b".charCodeAt(0);
-                  str.push(charcode);
-                  break;
-                }
-                case "f": {
-                  this.pos += 1;
-                  const charcode = "\f".charCodeAt(0);
-                  str.push(charcode);
-                  break;
-                }
-
-                // hex esc char
-                case "x":
-                case "X": {
-                  this.pos += 1; // skip x
-                  const start = this.pos;
-                  while (
-                    (is_digit(this.ch()) || is_hex(this.ch())) &&
-                    this.ch() != "X" &&
-                    this.ch() != "x"
-                  ) {
-                    this.pos += 1;
-                  }
-
-                  const hex = Number(`0x${this.src.slice(start, this.pos)}`);
-                  if (hex > 0xff) {
-                    throw new Error(
-                      error_at(
-                        this.src,
-                        this.pos - 1,
-                        this.line_no,
-                        this.filename,
-                        "hex escape sequence out of range",
-                      ),
-                    );
-                  }
-
-                  str.push(hex);
-                  break;
-                }
-
-                default:
-                  // octal esc char
-                  if ("0" <= ec && ec <= "7") {
-                    let n = 0;
-                    let oc = this.ch();
-                    n = (n << 3) + (oc - "0");
-                    this.pos += 1;
-                    oc = this.ch();
-                    if ("0" <= oc && oc <= "7") {
-                      n = (n << 3) + (oc - "0");
-                      this.pos += 1;
-                      oc = this.ch();
-                      if ("0" <= oc && oc <= "7") {
-                        n = (n << 3) + (oc - "0");
-                        this.pos += 1;
-                        oc = this.ch();
-                      }
-                    }
-                    str.push(n);
-                    continue;
-                  }
-
-                  throw new Error(
-                    error_at(
-                      this.src,
-                      this.pos,
-                      this.line_no,
-                      this.filename,
-                      "unsupported escape character",
-                    ),
-                  );
-              } // end switch
-
+              str.push(this.read_escape_char());
               continue;
-            } // end if
+            }
 
             // normal
             str.push(c.charCodeAt(0));
@@ -722,6 +755,8 @@
           ["case", TokenKind.TK_KW_CASE],
           ["default", TokenKind.TK_KW_DEFAULT],
           ["enum", TokenKind.TK_KW_ENUM],
+          ["signed", TokenKind.TK_KW_SIGNED],
+          ["unsigned", TokenKind.TK_KW_UNSIGNED],
         ]);
 
         let k = kws.get(ident);
@@ -746,7 +781,14 @@
       }
 
       class Type {
-        constructor(kind, size = 8, align = 8, base = None, name = None) {
+        constructor(
+          kind,
+          size = 8,
+          align = 8,
+          base = None,
+          name = None,
+          is_unsigned = false,
+        ) {
           this.kind = kind;
           this.base = base; // base Type
           this.size = size;
@@ -756,6 +798,7 @@
           this.array_len = -1;
           this.struct_fields = undefined; // [Node];
           this.tagname = None; // Token
+          this.is_unsigned = is_unsigned;
         }
 
         set_name(name) {
@@ -823,6 +866,7 @@
             this.align,
             this.base,
             this.name,
+            this.is_unsigned,
           );
           ty.func = this.func;
           ty.array_len = this.array_len;
@@ -866,9 +910,13 @@
       }
 
       const long_ty = new Type(TypeKind.TY_LONG, 8, 8);
+      const ulong_ty = new Type(TypeKind.TY_LONG, 8, 8, None, None, true);
       const int_ty = new Type(TypeKind.TY_INT, 4, 4);
+      const uint_ty = new Type(TypeKind.TY_INT, 4, 4, None, None, true);
       const short_ty = new Type(TypeKind.TY_SHORT, 2, 2);
+      const ushort_ty = new Type(TypeKind.TY_SHORT, 2, 2, None, None, true);
       const char_ty = new Type(TypeKind.TY_CHAR, 1, 1);
+      const uchar_ty = new Type(TypeKind.TY_CHAR, 1, 1, None, None, true);
       const void_ty = new Type(TypeKind.TY_VOID, 1, 1);
 
       function common_type(lhsty, rhsty) {
@@ -916,6 +964,7 @@
         static ND_CASE = Symbol("ND_CASE");
         static ND_EXPR_STMT = Symbol("ND_EXPR_STMT");
         static ND_COMMA = Symbol("ND_COMMA");
+        static ND_CAST = Symbol("ND_CAST");
         static ND_PREFIX_INCR = Symbol("ND_PREFIX_INCR");
         static ND_POSTFIX_INCR = Symbol("ND_POSTFIX_INCR");
       }
@@ -938,7 +987,11 @@
       }
 
       function new_binary_node(kind, lhs, rhs, loc, ty) {
-        return new Node(kind, [lhs, rhs], loc, ty);
+        return new Node(kind, [lhs, rhs], loc, common_type(lhs.type, rhs.type));
+      }
+
+      function new_cast_node(ty, nd, loc) {
+        return new Node(NodeKind.ND_CAST, nd, loc, ty);
       }
 
       class SymbolTable {
@@ -978,11 +1031,35 @@
         return Math.floor((base + alg - 1) / alg) * alg;
       }
 
-      // return integer
+      // @return: Node todo!
+      // function fold_integer_node(nd) {
+      //   let lhs;
+      //   let rhs;
+      //   switch (nd.kind) {
+      //     case NodeKind.ND_ADD: {
+      //       if (!nd.type.is_integer()) return nd;
+      //       lhs = fold_integer_node(nd.data[0]);
+      //       rhs = fold_integer_node(nd.data[0]);
+      //       if (lhs.kind == NodeKind.ND_INT && rhs.kind == NodeKind.ND_INT) {
+      //         lhs.data += rhs.data;
+      //         lhs.type = common_type(lhs.type, rhs.type);
+      //         return lhs;
+      //       }
+      //     }
+      //   }
+      // }
+
+      // @return: integer
       function eval_const_expr(nd) {
         switch (nd.kind) {
           case NodeKind.ND_INT:
             return nd.data;
+          case NodeKind.ND_NEG:
+            return -eval_const_expr(nd.data);
+          case NodeKind.ND_BITNOT:
+            return ~eval_const_expr(nd.data);
+          case NodeKind.ND_NOT:
+            return !eval_const_expr(nd.data);
           case NodeKind.ND_ADD:
             return eval_const_expr(nd.data[0]) + eval_const_expr(nd.data[1]);
           case NodeKind.ND_SUB:
@@ -991,9 +1068,37 @@
             return eval_const_expr(nd.data[0]) * eval_const_expr(nd.data[1]);
           case NodeKind.ND_DIV:
             return eval_const_expr(nd.data[0]) / eval_const_expr(nd.data[1]);
+          case NodeKind.ND_MOD:
+            return eval_const_expr(nd.data[0]) % eval_const_expr(nd.data[1]);
+          case NodeKind.ND_LT:
+            return eval_const_expr(nd.data[0]) < eval_const_expr(nd.data[1]);
+          case NodeKind.ND_GT:
+            return eval_const_expr(nd.data[0]) > eval_const_expr(nd.data[1]);
+          case NodeKind.ND_LE:
+            return eval_const_expr(nd.data[0]) <= eval_const_expr(nd.data[1]);
+          case NodeKind.ND_GE:
+            return eval_const_expr(nd.data[0]) >= eval_const_expr(nd.data[1]);
+          case NodeKind.ND_EQ:
+            return eval_const_expr(nd.data[0]) == eval_const_expr(nd.data[1]);
+          case NodeKind.ND_NE:
+            return eval_const_expr(nd.data[0]) != eval_const_expr(nd.data[1]);
+          case NodeKind.ND_BITAND:
+            return eval_const_expr(nd.data[0]) & eval_const_expr(nd.data[1]);
+          case NodeKind.ND_BITOR:
+            return eval_const_expr(nd.data[0]) | eval_const_expr(nd.data[1]);
+          case NodeKind.ND_BITXOR:
+            return eval_const_expr(nd.data[0]) ^ eval_const_expr(nd.data[1]);
+          case NodeKind.ND_LOGAND:
+            return eval_const_expr(nd.data[0]) && eval_const_expr(nd.data[1]);
+          case NodeKind.ND_LOGOR:
+            return eval_const_expr(nd.data[0]) || eval_const_expr(nd.data[1]);
+          case NodeKind.ND_SHL:
+            return eval_const_expr(nd.data[0]) << eval_const_expr(nd.data[1]);
+          case NodeKind.ND_SHR:
+            return eval_const_expr(nd.data[0]) >> eval_const_expr(nd.data[1]);
+          default:
+            throw new Error(error_token(nd.loc, "not a compile-time constant"));
         }
-
-        throw new Error(error_token(nd.loc, "not a compile-time constant"));
       }
 
       function pointer_array_arith_helper(arr, op, idx, loc) {
@@ -1027,7 +1132,7 @@
         if (is_lhs_ptr && is_rhs_ptr && op == NodeKind.ND_SUB) {
           const len = new Node(NodeKind.ND_SUB, [lhs, rhs], loc, long_ty);
           const d = new_long_node(BigInt(lhs.type.base.size), lhs.loc);
-          return new Node(NodeKind.ND_DIV, [len, d], loc, len.type);
+          return new Node(NodeKind.ND_DIV, [len, d], loc, long_ty);
         }
 
         // ptr +/- num
@@ -1049,13 +1154,7 @@
           return pointer_array_arith(lhs, op, rhs, loc);
         }
 
-        return new_binary_node(
-          op,
-          lhs,
-          rhs,
-          loc,
-          common_type(lhs.type, rhs.type),
-        );
+        return new_binary_node(op, lhs, rhs, loc);
       }
 
       class InitValueKind {
@@ -1114,11 +1213,12 @@
           this.continue_label = None;
           this.return_label = None;
           this.current_switch = None;
+          this.current_func = None;
         }
 
         parse() {
           let tree = [];
-          let mainfunc;
+          let mainfunc = None;
           while (this.curtok.kind != TokenKind.TK_END) {
             let s = this.next();
             if (s != None) {
@@ -1130,7 +1230,10 @@
             }
           }
 
-          tree.push(mainfunc);
+          if (mainfunc != None) {
+            tree.push(mainfunc);
+          }
+
           return {
             tree: tree,
             gvars: this.gvars,
@@ -1138,8 +1241,17 @@
           };
         }
 
-        next() {
+        reset() {
           this.offsets = 16;
+          this.break_label = None;
+          this.continue_label = None;
+          this.return_label = None;
+          this.current_switch = None;
+          this.current_func = None;
+        }
+
+        next() {
+          this.reset();
           let loc = this.curtok;
           const attr = this.var_attr();
           if (attr.is_typedef) return this.typedef_stmt(true);
@@ -1235,6 +1347,7 @@
           }
 
           this.advance();
+          this.current_func = fdef;
           const return_save = this.return_label;
           this.return_label = my_return;
           var pnd = [];
@@ -1288,7 +1401,6 @@
           }
         }
 
-        // todo! break
         switch_stmt() {
           const loc = this.curtok;
           this.advance();
@@ -1419,7 +1531,20 @@
           }
           const loc = this.curtok;
           this.advance(); // skip "return"
-          const nd = this.expr_stmt();
+
+          let nd;
+          if (this.curtok.kind == TokenKind.TK_SEMICOLON) {
+            this.advance();
+            nd = None;
+          } else {
+            nd = new_cast_node(
+              this.current_func.type.func.ret_ty,
+              this.expr(),
+              loc,
+            );
+            this.skip(TokenKind.TK_SEMICOLON);
+          }
+
           return new Node(
             NodeKind.ND_RETURN,
             { expr: nd, label: this.return_label },
@@ -1609,6 +1734,8 @@
             case TokenKind.TK_KW_STRUCT:
             case TokenKind.TK_KW_UNION:
             case TokenKind.TK_KW_ENUM:
+            case TokenKind.TK_KW_SIGNED:
+            case TokenKind.TK_KW_UNSIGNED:
               return true;
           }
 
@@ -1930,6 +2057,7 @@
           const start = this.curtok;
           const var_attr = this.var_attr();
           let basety = this.decl_spec();
+
           let b = false;
           let stmts = [];
           while (this.curtok.kind != TokenKind.TK_SEMICOLON) {
@@ -2054,6 +2182,8 @@
           const SHORT = 1 << 4;
           const INT = 1 << 6;
           const LONG = 1 << 8;
+          const SIGNED = 1 << 17;
+          const UNSIGNED = 1 << 18;
 
           let loc = this.curtok;
           var tycnt = 0;
@@ -2088,6 +2218,18 @@
               continue;
             }
 
+            if (this.curtok.kind == TokenKind.TK_KW_SIGNED) {
+              tycnt |= SIGNED;
+              this.advance();
+              continue;
+            }
+
+            if (this.curtok.kind == TokenKind.TK_KW_UNSIGNED) {
+              tycnt |= UNSIGNED;
+              this.advance();
+              continue;
+            }
+
             break;
           }
 
@@ -2095,15 +2237,36 @@
             case VOID:
               return void_ty;
             case CHAR:
+            case SIGNED + CHAR:
               return char_ty;
+            case UNSIGNED + CHAR:
+              return uchar_ty;
             case SHORT:
             case SHORT + INT:
+            case SIGNED + SHORT:
+            case SIGNED + SHORT + INT:
               return short_ty;
+            case UNSIGNED + SHORT:
+            case UNSIGNED + SHORT + INT:
+              return ushort_ty;
             case INT:
+            case SIGNED + INT:
               return int_ty;
+            case UNSIGNED + INT:
+              return uint_ty;
             case LONG:
+            case LONG + LONG:
             case INT + LONG:
+            case INT + LONG + LONG:
+            case SIGNED + LONG:
+            case SIGNED + LONG + LONG:
+            case SIGNED + INT + LONG:
+            case SIGNED + INT + LONG + LONG:
               return long_ty;
+            case UNSIGNED + LONG:
+            case UNSIGNED + INT + LONG:
+            case UNSIGNED + INT + LONG + LONG:
+              return ulong_ty;
           }
 
           if (this.curtok.kind == TokenKind.TK_KW_STRUCT)
@@ -2561,12 +2724,48 @@
         }
 
         add() {
-          var nd = this.mul();
+          let nd = this.mul();
           while (true) {
             if (this.curtok.kind == TokenKind.TK_PLUS) {
               const postok = this.curtok;
               this.advance();
               const rhs = this.mul();
+
+              // fold integer
+              if (nd.type.is_integer() && rhs.type.is_integer()) {
+                if (nd.kind == NodeKind.ND_INT && rhs.kind == NodeKind.ND_INT) {
+                  nd.data += rhs.data;
+                  nd.type = common_type(nd.type, rhs.type);
+                  continue;
+                }
+
+                if (nd.kind == NodeKind.ND_ADD && rhs.kind == NodeKind.ND_INT) {
+                  if (nd.data[0].kind == NodeKind.ND_INT) {
+                    nd.data[0].data += rhs.data;
+                    nd.data[0].type = common_type(nd.data[0].type, rhs.type);
+                    continue;
+                  }
+                  if (nd.data[1].kind == NodeKind.ND_INT) {
+                    nd.data[1].data += rhs.data;
+                    nd.data[1].type = common_type(nd.data[1].type, rhs.type);
+                    continue;
+                  }
+                }
+
+                if (nd.kind == NodeKind.ND_SUB && rhs.kind == NodeKind.ND_INT) {
+                  if (nd.data[0].kind == NodeKind.ND_INT) {
+                    nd.data[0].data = nd.data[0].data + rhs.data;
+                    nd.data[0].type = common_type(nd.data[0].type, rhs.type);
+                    continue;
+                  }
+                  if (nd.data[1].kind == NodeKind.ND_INT) {
+                    nd.data[1].data -= rhs.data;
+                    nd.data[1].type = common_type(nd.data[1].type, rhs.type);
+                    continue;
+                  }
+                }
+              }
+
               nd = new_add_sub_node(nd, NodeKind.ND_ADD, rhs, postok);
               continue;
             }
@@ -2575,6 +2774,42 @@
               const postok = this.curtok;
               this.advance();
               const rhs = this.mul();
+
+              // fold integer
+              if (nd.type.is_integer() && rhs.type.is_integer()) {
+                if (nd.kind == NodeKind.ND_INT && rhs.kind == NodeKind.ND_INT) {
+                  nd.data -= rhs.data;
+                  nd.type = common_type(nd.type, rhs.type);
+                  continue;
+                }
+
+                if (nd.kind == NodeKind.ND_SUB && rhs.kind == NodeKind.ND_INT) {
+                  if (nd.data[0].kind == NodeKind.ND_INT) {
+                    nd.data[0].data -= rhs.data;
+                    nd.data[0].type = common_type(nd.data[0].type, rhs.type);
+                    continue;
+                  }
+                  if (nd.data[1].kind == NodeKind.ND_INT) {
+                    nd.data[1].data += rhs.data;
+                    nd.data[1].type = common_type(nd.data[1].type, rhs.type);
+                    continue;
+                  }
+                }
+
+                if (nd.kind == NodeKind.ND_ADD && rhs.kind == NodeKind.ND_INT) {
+                  if (nd.data[0].kind == NodeKind.ND_INT) {
+                    nd.data[0].data -= rhs.data;
+                    nd.data[0].type = common_type(nd.data[0].type, rhs.type);
+                    continue;
+                  }
+                  if (nd.data[1].kind == NodeKind.ND_INT) {
+                    nd.data[1].data -= rhs.data;
+                    nd.data[1].type = common_type(nd.data[1].type, rhs.type);
+                    continue;
+                  }
+                }
+              }
+
               nd = new_add_sub_node(nd, NodeKind.ND_SUB, rhs, postok);
               continue;
             }
@@ -2584,28 +2819,63 @@
           return nd;
         }
 
-        // unary ((* | / | %) unary)*
+        // mul = cast ((* | / | %) cast)*
         mul() {
-          var nd = this.unary();
+          let nd = this.cast();
           while (true) {
             if (this.curtok.kind == TokenKind.TK_ASTERISK) {
               let postok = this.curtok;
               this.advance();
-              nd = new_binary_node(NodeKind.ND_MUL, nd, this.unary(), postok);
+              const rhs = this.cast();
+
+              // fold integer
+              if (nd.type.is_integer() && rhs.type.is_integer()) {
+                if (nd.kind == NodeKind.ND_INT && rhs.kind == NodeKind.ND_INT) {
+                  nd.data *= rhs.data;
+                  nd.type = common_type(nd.type, rhs.type);
+                  continue;
+                }
+
+                if (nd.kind == NodeKind.ND_MUL && rhs.kind == NodeKind.ND_INT) {
+                  if (nd.data[0].kind == NodeKind.ND_INT) {
+                    nd.data[0].data *= rhs.data;
+                    nd.data[0].type = common_type(nd.data[0].type, rhs.type);
+                    continue;
+                  }
+                  if (nd.data[1].kind == NodeKind.ND_INT) {
+                    nd.data[1].data *= rhs.data;
+                    nd.data[1].type = common_type(nd.data[1].type, rhs.type);
+                    continue;
+                  }
+                }
+              }
+
+              nd = new_binary_node(NodeKind.ND_MUL, nd, rhs, postok);
               continue;
             }
 
             if (this.curtok.kind == TokenKind.TK_SLASH) {
               let postok = this.curtok;
               this.advance();
-              nd = new_binary_node(NodeKind.ND_DIV, nd, this.unary(), postok);
+              const rhs = this.cast();
+
+              // fold integer
+              if (nd.type.is_integer() && rhs.type.is_integer()) {
+                if (nd.kind == NodeKind.ND_INT && rhs.kind == NodeKind.ND_INT) {
+                  nd.data /= rhs.data;
+                  nd.type = common_type(nd.type, rhs.type);
+                  continue;
+                }
+              }
+
+              nd = new_binary_node(NodeKind.ND_DIV, nd, rhs, postok);
               continue;
             }
 
             if (this.curtok.kind == TokenKind.TK_MOD) {
               let postok = this.curtok;
               this.advance();
-              nd = new_binary_node(NodeKind.ND_MOD, nd, this.unary(), postok);
+              nd = new_binary_node(NodeKind.ND_MOD, nd, this.cast(), postok);
               continue;
             }
 
@@ -2615,38 +2885,54 @@
           return nd;
         }
 
-        // (* | & | + | - | ! | ++ | -- | ~) unary | postfix
+        // cast = "(" typename  ")" cast | unary
+        cast() {
+          if (
+            this.curtok.kind == TokenKind.TK_LPAREN &&
+            this.is_typename(this.peektok)
+          ) {
+            const loc = this.curtok;
+            this.advance();
+            const ty = this.abstract_declarator(this.decl_spec());
+            this.skip(TokenKind.TK_RPAREN);
+            return new Node(NodeKind.ND_CAST, this.cast(), loc, ty);
+          }
+
+          return this.unary();
+        }
+
+        // unary = (* | & | + | - | ! | ++ | -- | ~) cast | postfix
         unary() {
           if (this.curtok.kind == TokenKind.TK_ASTERISK) {
             let loc = this.curtok;
             this.advance();
-            let nd = this.unary();
+            let nd = this.cast();
             return new Node(NodeKind.ND_DEREF, nd, loc, nd.type.base);
           }
 
           if (this.curtok.kind == TokenKind.TK_BITAND) {
             let loc = this.curtok;
             this.advance();
-            let nd = this.unary();
+            let nd = this.cast();
             return new Node(NodeKind.ND_ADDR, nd, loc, nd.type.to_pointer());
           }
 
           if (this.curtok.kind == TokenKind.TK_PLUS) {
             this.advance();
-            return this.unary();
+            return this.cast();
           }
 
           if (this.curtok.kind == TokenKind.TK_MINUS) {
             let loc = this.curtok;
             this.advance();
-            let nd = this.unary();
+            let nd = this.cast();
             return new Node(NodeKind.ND_NEG, nd, loc, nd.type);
           }
 
           if (this.curtok.kind == TokenKind.TK_BANG) {
             let loc = this.curtok;
             this.advance();
-            let nd = this.unary();
+            let nd = this.cast();
             return new Node(NodeKind.ND_NOT, nd, loc, nd.type);
           }
 
@@ -2654,7 +2940,7 @@
           if (this.curtok.kind == TokenKind.TK_PLUS_PLUS) {
             const loc = this.curtok;
             this.advance();
-            const nd = this.unary(); // i
+            const nd = this.cast(); // i
             return new Node(NodeKind.ND_PREFIX_INCR, [nd, 1], loc, nd.type);
           }
 
@@ -2662,14 +2948,14 @@
           if (this.curtok.kind == TokenKind.TK_MINUS_MINUS) {
             const loc = this.curtok;
             this.advance();
-            const nd = this.unary();
+            const nd = this.cast();
             return new Node(NodeKind.ND_PREFIX_INCR, [nd, -1], loc, nd.type);
           }
 
           if (this.curtok.kind == TokenKind.TK_BITNOT) {
             let loc = this.curtok;
             this.advance();
-            const nd = this.unary();
+            const nd = this.cast();
             return new Node(NodeKind.ND_BITNOT, nd, loc, nd.type);
           }
 
@@ -2781,15 +3067,7 @@
         primary() {
           let postok = this.curtok;
           if (this.curtok.kind == TokenKind.TK_INT) {
-            // octal number
-            let nstr = this.curtok.val;
-            if (nstr.length >= 2 && nstr[0] == "0" && !is_hex(nstr[1])) {
-              if (!(nstr[1] == "o" || nstr[1] == "O")) {
-                nstr = String(`0o${nstr.slice(1)}`);
-              }
-            }
-
-            let i = BigInt(nstr); // int64
+            let i = this.curtok.val;
             this.advance();
             if (i >= 2n ** 32n) return new_long_node(i, postok);
             return new_int_node(i, postok);
@@ -2842,7 +3120,7 @@
                 throw new Error(error_token(loc, "expect abstract declarator"));
               }
               this.skip(TokenKind.TK_RPAREN);
-              return new_int_node(abs_ty.size, loc);
+              return new_int_node(BigInt(abs_ty.size), loc);
             }
 
             if (this.is_typename(this.curtok)) {
@@ -2855,7 +3133,7 @@
             }
 
             const nd = this.unary();
-            return new_int_node(nd.type.size, loc);
+            return new_int_node(BigInt(nd.type.size), loc);
           }
 
           throw new Error(
@@ -3227,6 +3505,13 @@
                 );
               } else return this.to_str();
 
+            case Op.BSTRPICK_D:
+              return String(
+                `${this.op().description} $${reg2str(this.d())}, $${reg2str(
+                  this.j(),
+                )}, ${this.k()}, ${this.any()}`,
+              );
+
             default:
               return this.to_str();
           }
@@ -3315,6 +3600,7 @@
           this.continue_ip = [];
           this.return_ip = [];
           this.case_start_ip = None;
+          this.reg_used = Array(9).fill(false);
         }
 
         codegen(treelist) {
@@ -3508,6 +3794,8 @@
         }
 
         gen_func(nd) {
+          this.reg_used.fill(false);
+
           // prolog
           if (nd.data.attr.is_static) {
             this.gen_inst(
@@ -3544,7 +3832,7 @@
             this.gen_store(pa.type, A0 + i, FP, pa.data.offset, pa.loc);
           }
 
-          this.gen_stmt(nd.data.body);
+          this.gen_stmt(nd.data.body, A0);
 
           if (nd.data.name.val == "main") {
             this.gen_inst(Op.OR, A0, ZERO, ZERO);
@@ -3565,7 +3853,7 @@
           this.gen_inst(Op.JIRL, ZERO, RA, None, 0);
         }
 
-        gen_stmt(nd) {
+        gen_stmt(nd, reg = A0) {
           this.gen_inst(
             Op.DOT_PSEUDO,
             None,
@@ -3577,7 +3865,7 @@
 
           switch (nd.kind) {
             case NodeKind.ND_SWITCH:
-              this.gen_switch(nd);
+              this.gen_switch(nd, reg);
               break;
 
             case NodeKind.ND_CASE:
@@ -3585,21 +3873,21 @@
               break;
 
             case NodeKind.ND_FOR:
-              this.gen_for(nd);
+              this.gen_for(nd, reg);
               break;
 
             case NodeKind.ND_BLOCK:
               for (let s of nd.data) {
-                this.gen_stmt(s);
+                this.gen_stmt(s, reg);
               }
               break;
 
             case NodeKind.ND_EXPR_STMT:
-              this.gen_expr(nd.data);
+              this.gen_expr(nd.data, reg);
               break;
 
             case NodeKind.ND_IF:
-              this.gen_if(nd);
+              this.gen_if(nd, reg);
               break;
 
             case NodeKind.ND_BREAK:
@@ -3613,9 +3901,11 @@
               break;
 
             case NodeKind.ND_RETURN:
-              this.gen_stmt(nd.data.expr);
-              this.return_ip.push({ label: nd.data.label, ip: this.ip });
-              this.gen_inst(Op.B, None, None, None, 0, nd.data.label);
+              if (nd.data.expr != None) {
+                this.gen_expr(nd.data.expr, reg);
+                this.return_ip.push({ label: nd.data.label, ip: this.ip });
+                this.gen_inst(Op.B, None, None, None, 0, nd.data.label);
+              }
               break;
 
             default:
@@ -3629,9 +3919,11 @@
               );
               throw new Error(msg);
           }
+
+          // return reg;
         }
 
-        gen_expr(tree) {
+        gen_expr(tree, reg = A0) {
           this.gen_inst(
             Op.DOT_PSEUDO,
             None,
@@ -3642,136 +3934,154 @@
           );
 
           switch (tree.kind) {
+            case NodeKind.ND_CAST:
+              this.gen_expr(tree.data, reg);
+              this.gen_cast(tree.data.type, tree.type, reg);
+              break;
+
             case NodeKind.ND_BITAND:
-              this.gen_bitand(tree);
+              this.gen_bitand(tree, reg);
               break;
 
             case NodeKind.ND_BITXOR:
-              this.gen_bitxor(tree);
+              this.gen_bitxor(tree, reg);
               break;
 
             case NodeKind.ND_BITOR:
-              this.gen_bitor(tree);
+              this.gen_bitor(tree, reg);
               break;
 
             case NodeKind.ND_SHR:
-              this.gen_shr(tree);
+              this.gen_shr(tree, reg);
               break;
 
             case NodeKind.ND_SHL:
-              this.gen_shl(tree);
+              this.gen_shl(tree, reg);
               break;
 
             case NodeKind.ND_POSTFIX_INCR:
               const i = tree.data[0];
               const n = tree.data[1];
-              this.gen_expr(i);
-              this.gen_inst(Op.ADDI_D, A1, A0, None, n);
-              this.gen_addr(i);
-              this.gen_store(i.type, A1, A0, 0, i.loc);
-              this.gen_inst(Op.ADDI_D, A0, A1, None, -n);
+              this.gen_expr(i, reg);
+              const reg1 = this.get_reg();
+              this.gen_inst(Op.ADDI_D, reg1, reg, None, n);
+              const reg2 = this.get_reg();
+              this.gen_addr(i, reg2);
+              this.gen_store(i.type, reg1, reg2, 0, i.loc);
+              this.gen_inst(Op.ADDI_D, reg, reg1, None, -n);
+              this.free_reg(reg1);
+              this.free_reg(reg2);
               break;
 
             case NodeKind.ND_PREFIX_INCR:
-              this.gen_prefix_incr(tree);
+              this.gen_prefix_incr(tree, reg);
               break;
+
             case NodeKind.ND_COMMA:
-              this.gen_comma_epxr(tree);
+              this.gen_comma_epxr(tree, reg);
               break;
+
             case NodeKind.ND_ADD:
-              this.gen_add(tree);
+              this.gen_add(tree, reg);
               break;
+
             case NodeKind.ND_INT:
-              this.gen_int(tree);
+              this.gen_int(tree, reg);
               break;
+
             case NodeKind.ND_SUB:
-              this.gen_sub(tree);
+              this.gen_sub(tree, reg);
               break;
             case NodeKind.ND_MUL:
-              this.gen_mul(tree);
+              this.gen_mul(tree, reg);
               break;
+
             case NodeKind.ND_DIV:
-              this.gen_div(tree);
+              this.gen_div(tree, reg);
               break;
+
             case NodeKind.ND_MOD:
-              this.gen_mod(tree);
+              this.gen_mod(tree, reg);
               break;
+
             case NodeKind.ND_GT:
-              this.gen_lt(tree.data[1], tree.data[0]);
+              this.gen_lt(tree.data[1], tree.data[0], reg);
               break;
             case NodeKind.ND_LT:
-              this.gen_lt(tree.data[0], tree.data[1]);
+              this.gen_lt(tree.data[0], tree.data[1], reg);
               break;
+
             case NodeKind.ND_GE:
-              this.gen_lt(tree.data[0], tree.data[1]);
-              this.gen_inst(Op.SLTUI, A0, A0, None, 1);
+              this.gen_lt(tree.data[0], tree.data[1], reg);
+              this.gen_inst(Op.SLTUI, reg, reg, None, 1);
               break;
+
             case NodeKind.ND_LE:
-              this.gen_lt(tree.data[1], tree.data[0]);
-              this.gen_inst(Op.SLTUI, A0, A0, None, 1);
+              this.gen_lt(tree.data[1], tree.data[0], reg);
+              this.gen_inst(Op.SLTUI, reg, reg, None, 1);
               break;
 
             case NodeKind.ND_EQ:
-              this.gen_neq(tree);
-              this.gen_inst(Op.SLTUI, A0, A0, None, 1);
+              this.gen_neq(tree, reg);
+              this.gen_inst(Op.SLTUI, reg, reg, None, 1);
               break;
 
             case NodeKind.ND_NE:
-              this.gen_neq(tree);
+              this.gen_neq(tree, reg);
               break;
 
             case NodeKind.ND_LOGAND:
-              this.gen_logand(tree);
+              this.gen_logand(tree, reg);
               break;
 
             case NodeKind.ND_LOGOR:
-              this.gen_logor(tree);
+              this.gen_logor(tree, reg);
               break;
 
             case NodeKind.ND_CONDITIONAL:
-              this.gen_conditional(tree);
+              this.gen_conditional(tree, reg);
               break;
 
             case NodeKind.ND_ASSIGN:
-              this.gen_assign(tree);
+              this.gen_assign(tree, reg);
               break;
 
             case NodeKind.ND_VAR:
-              this.gen_addr(tree);
-              this.gen_load(tree.type, A0, A0, 0, tree.loc);
+              this.gen_addr(tree, reg);
+              this.gen_load(tree.type, reg, reg, 0, tree.loc);
               break;
 
             case NodeKind.ND_ADDR:
-              this.gen_addr(tree.data);
+              this.gen_addr(tree.data, reg);
               break;
 
             case NodeKind.ND_DEREF:
-              this.gen_expr(tree.data);
-              this.gen_load(tree.type, A0, A0, 0, tree.loc);
+              this.gen_expr(tree.data, reg);
+              this.gen_load(tree.type, reg, reg, 0, tree.loc);
               break;
 
             case NodeKind.ND_FUNCALL:
-              this.gen_funcall(tree);
+              this.gen_funcall(tree, reg);
               break;
 
             case NodeKind.ND_NOT:
-              this.gen_expr(tree.data);
-              this.gen_not(A0, A0);
+              this.gen_expr(tree.data, reg);
+              this.gen_not(reg, reg);
               break;
 
             case NodeKind.ND_NEG:
-              this.gen_expr(tree.data);
-              this.gen_neg(A0, A0);
+              this.gen_expr(tree.data, reg);
+              this.gen_neg(reg, reg);
               break;
 
             case NodeKind.ND_STRUCT_REF:
-              this.gen_addr(tree);
-              this.gen_load(tree.data[1].type, A0, A0, 0, tree.loc);
+              this.gen_addr(tree, reg);
+              this.gen_load(tree.data[1].type, reg, reg, 0, tree.loc);
               break;
 
             case NodeKind.ND_BITNOT:
-              this.gen_expr(tree.data);
-              this.gen_inst(Op.NOR, A0, A0, ZERO);
+              this.gen_expr(tree.data, reg);
+              this.gen_inst(Op.NOR, reg, reg, ZERO);
               break;
 
             default:
@@ -3795,8 +4105,10 @@
           this.gen_inst(Op.SLTUI, d, j, None, 1);
         }
 
-        gen_funcall(nd) {
-          let i = nd.data.arg.length - 1;
+        gen_funcall(nd, reg = A0) {
+          // const paramlen = nd.data.func.type.func.param.length;
+          const paramlen = nd.data.arg.length;
+          let i = paramlen - 1;
           if (i > 8) {
             throw new Error(
               error_token(nd.loc, `unsupported number of arguments ${i} > 8`),
@@ -3804,11 +4116,11 @@
           }
 
           for (; i >= 0; i--) {
-            this.gen_expr(nd.data.arg[i]);
-            this.push();
+            this.gen_expr(nd.data.arg[i], A0);
+            this.push(A0);
           }
 
-          for (let j = 0; j < nd.data.arg.length; j++) {
+          for (let j = 0; j < paramlen; j++) {
             this.pop(A0 + j);
           }
 
@@ -3821,29 +4133,90 @@
             -(this.ip - fip),
             nd.data.func.data.name.val,
           );
+
+          if (reg != A0) {
+            this.gen_inst(Op.OR, reg, A0, ZERO);
+            this.free_reg(A0);
+          }
         }
 
-        gen_prefix_incr(nd) {
+        gen_prefix_incr(nd, reg) {
           const i = nd.data[0];
-          this.gen_addr(i);
-          this.gen_load(i.type, A1, A0, 0, nd.loc);
-          this.gen_inst(Op.ADDI_D, A1, A1, None, nd.data[1]);
-          this.gen_store(i.type, A1, A0, 0, nd.loc);
-          this.gen_inst(Op.OR, A0, A1, ZERO);
+          this.gen_addr(i, reg);
+          const reg1 = this.get_reg();
+          this.gen_load(i.type, reg1, reg, 0, nd.loc);
+          this.gen_inst(Op.ADDI_D, reg1, reg1, None, nd.data[1]);
+          this.gen_store(i.type, reg1, reg, 0, nd.loc);
+          this.gen_inst(Op.OR, reg, reg1, ZERO);
+          this.free_reg(reg1);
         }
 
-        gen_comma_epxr(nd) {
-          this.gen_expr(nd.data[0]);
-          this.gen_expr(nd.data[1]);
+        gen_comma_epxr(nd, reg) {
+          this.gen_expr(nd.data[0], reg);
+          this.gen_expr(nd.data[1], reg);
         }
 
-        gen_assign(nd) {
-          // console.log(nd.data[0]);
-          this.gen_addr(nd.data[0]);
-          this.push();
-          this.gen_expr(nd.data[1]);
-          this.pop(A1);
-          this.gen_inst(Op.ST_D, A0, A1, None, 0);
+        gen_gvar_addr(nd, d) {
+          const ip = -(this.ip - this.resolve_obj_ip(nd.data.name));
+          let hi20 = (ip >> 12) & 0xfffff;
+          if (hi20 == 0xfffff) hi20 = 0; // todo!
+          const lo12 = ip & 0xfff;
+          // this.gen_inst(
+          //   Op.PCADDI,
+          //   A0,
+          //   None,
+          //   None,
+          //   ip,
+          //   nd.data.name.val,
+          // );
+
+          // todo!
+          this.gen_inst(
+            Op.PCALAU12I,
+            d,
+            None,
+            None,
+            hi20,
+            String(`%pc_hi20(${nd.data.name.val})`),
+          );
+          this.gen_inst(
+            Op.ADDI_D,
+            d,
+            d,
+            None,
+            lo12,
+            String(`%pc_lo12(${nd.data.name.val})`),
+          );
+        }
+
+        gen_assign(nd, reg) {
+          const lhs = nd.data[0];
+          const rhs = nd.data[1];
+          switch (lhs.kind) {
+            case NodeKind.ND_VAR:
+              this.gen_expr(rhs, reg);
+              if (lhs.data.is_global) {
+                const reg1 = this.get_reg();
+                this.gen_gvar_addr(lhs, reg1);
+                this.gen_store(lhs.type, reg, reg1, 0, nd.loc);
+                this.free_reg(reg1);
+                return;
+              }
+
+              // local var
+              this.gen_store(lhs.type, reg, FP, lhs.data.offset, nd.loc);
+              return;
+
+            default:
+              this.gen_expr(rhs, reg);
+              const reg3 = this.get_reg();
+              this.gen_addr(lhs, reg3);
+              // this.push();
+              // this.pop(A1);
+              this.gen_store(lhs.type, reg, reg3, 0, nd.loc);
+              this.free_reg(reg3);
+              return;
+          }
         }
 
         // Load a value to `d` from where `j` is pointing to.
@@ -3852,9 +4225,17 @@
 
           switch (type.size) {
             case 1:
+              if (type.is_unsigned) {
+                this.gen_inst(Op.LD_BU, d, j, None, i);
+                return;
+              }
               this.gen_inst(Op.LD_B, d, j, None, i);
               return;
             case 4:
+              if (type.is_unsigned) {
+                this.gen_inst(Op.LD_WU, d, j, None, i);
+                return;
+              }
               this.gen_inst(Op.LD_W, d, j, None, i);
               return;
             case 8:
@@ -3885,54 +4266,25 @@
           throw new Error(msg);
         }
 
-        gen_addr(nd) {
+        gen_addr(nd, reg) {
           switch (nd.kind) {
             case NodeKind.ND_VAR:
               if (nd.data.is_global) {
-                const ip = -(this.ip - this.resolve_obj_ip(nd.data.name));
-                let hi20 = (ip >> 12) & 0xfffff;
-                if (hi20 == 0xfffff) hi20 = 0; // todo!
-                const lo12 = ip & 0xfff;
-                // this.gen_inst(
-                //   Op.PCADDI,
-                //   A0,
-                //   None,
-                //   None,
-                //   ip,
-                //   nd.data.name.val,
-                // );
-
-                // todo!
-                this.gen_inst(
-                  Op.PCALAU12I,
-                  A0,
-                  None,
-                  None,
-                  hi20,
-                  String(`%pc_hi20(${nd.data.name.val})`),
-                );
-                this.gen_inst(
-                  Op.ADDI_D,
-                  A0,
-                  A0,
-                  None,
-                  lo12,
-                  String(`%pc_lo12(${nd.data.name.val})`),
-                );
+                this.gen_gvar_addr(nd, reg);
                 return;
               }
 
               // local var
-              this.gen_inst(Op.ADDI_D, A0, FP, None, nd.data.offset);
+              this.gen_inst(Op.ADDI_D, reg, FP, None, nd.data.offset);
               return;
 
             case NodeKind.ND_DEREF:
-              this.gen_expr(nd.data);
+              this.gen_expr(nd.data, reg);
               return;
 
             case NodeKind.ND_STRUCT_REF:
-              this.gen_addr(nd.data[0]);
-              this.gen_inst(Op.ADDI_D, A0, A0, None, nd.data[1].data.offset);
+              this.gen_addr(nd.data[0], reg);
+              this.gen_inst(Op.ADDI_D, reg, reg, None, nd.data[1].data.offset);
               return;
 
             case NodeKind.ND_ASSIGN:
@@ -3940,22 +4292,23 @@
                 nd.type.kind == TypeKind.TY_STRUCT ||
                 nd.type.kind == TypeKind.TY_UNION
               ) {
-                this.gen_expr(nd);
-                return;
+                return this.gen_expr(nd, reg);
               }
               break;
 
             case NodeKind.ND_COMMA:
-              this.gen_expr(nd.data[0]);
-              this.gen_addr(nd.data[1]);
+              this.gen_expr(nd.data[0], reg);
+              this.gen_addr(nd.data[1], reg);
               return;
 
             case NodeKind.ND_PREFIX_INCR:
               const i = nd.data[0];
-              this.gen_addr(i);
-              this.gen_load(i.type, A1, A0, 0, nd.loc);
-              this.gen_inst(Op.ADDI_D, A1, A1, None, nd.data[1]);
-              this.gen_store(i.type, A1, A0, 0, i.loc);
+              this.gen_addr(i, reg);
+              const reg1 = this.get_reg();
+              this.gen_load(i.type, reg1, reg, 0, nd.loc);
+              this.gen_inst(Op.ADDI_D, reg1, reg1, None, nd.data[1]);
+              this.gen_store(i.type, reg1, reg, 0, i.loc);
+              this.free_reg(reg1);
               return;
           }
 
@@ -3964,75 +4317,93 @@
         }
 
         // jump if false
-        gen_cond_jmp(nd, lbelse) {
+        gen_cond_jmp(nd, lbelse, reg) {
           // l < r
           if (nd.kind == NodeKind.ND_LT) {
-            this.gen_binary(nd.data[0], nd.data[1]);
+            const reg1 = this.gen_binary(nd.data[0], nd.data[1], reg);
             const bip = this.ip;
-            this.gen_inst(Op.BGE, A1, A0, None, None, lbelse);
+            this.gen_inst(Op.BGE, reg1, reg, None, None, lbelse);
+            this.free_reg(reg1);
             return bip;
           }
 
           // l > r -> r < l
           if (nd.kind == NodeKind.ND_GT) {
-            this.gen_binary(nd.data[0], nd.data[1]);
+            const reg1 = this.gen_binary(nd.data[0], nd.data[1], reg);
             const bip = this.ip;
-            this.gen_inst(Op.BGE, A0, A1, None, None, lbelse);
+            this.gen_inst(Op.BGE, reg, reg1, None, None, lbelse);
+            this.free_reg(reg1);
             return bip;
           }
 
           // l <= r -> !(r < l)
           if (nd.kind == NodeKind.ND_LE) {
-            this.gen_binary(nd.data[0], nd.data[1]);
+            const reg1 = this.gen_binary(nd.data[0], nd.data[1], reg);
             const bip = this.ip;
-            this.gen_inst(Op.BLT, A0, A1, None, None, lbelse);
+            this.gen_inst(Op.BLT, reg, reg1, None, None, lbelse);
+            this.free_reg(reg1);
             return bip;
           }
 
           // l >= r -> !(l < r)
           if (nd.kind == NodeKind.ND_GE) {
-            this.gen_binary(nd.data[0], nd.data[1]);
+            const reg1 = this.gen_binary(nd.data[0], nd.data[1], reg);
             const bip = this.ip;
-            this.gen_inst(Op.BLT, A1, A0, None, None, lbelse);
+            this.gen_inst(Op.BLT, reg1, reg, None, None, lbelse);
+            this.free_reg(reg1);
             return bip;
           }
 
           if (nd.kind == NodeKind.ND_NE) {
-            this.gen_binary(nd.data[0], nd.data[1]);
+            const reg1 = this.gen_binary(nd.data[0], nd.data[1], reg);
             const bip = this.ip;
-            this.gen_inst(Op.BEQ, A1, A0, None, None, lbelse);
+            this.gen_inst(Op.BEQ, reg1, reg, None, None, lbelse);
+            this.free_reg(reg1);
             return bip;
           }
 
           if (nd.kind == NodeKind.ND_EQ) {
-            this.gen_binary(nd.data[0], nd.data[1]);
+            const reg1 = this.gen_binary(nd.data[0], nd.data[1], reg);
             const bip = this.ip;
-            this.gen_inst(Op.BNE, A1, A0, None, None, lbelse);
+            this.gen_inst(Op.BNE, reg1, reg, None, None, lbelse);
+            this.free_reg(reg1);
             return bip;
           }
 
           // other
-          this.gen_expr(nd);
+          this.gen_expr(nd, reg);
           const bip = this.ip;
-          this.gen_inst(Op.BEQZ, None, A0, None, None, lbelse);
+          this.gen_inst(Op.BEQZ, None, reg, None, None, lbelse);
           return bip;
         }
 
-        // lhs->A0, rhs->A1
-        gen_binary(lhs, rhs) {
-          this.gen_expr(rhs);
-          this.push();
-          this.gen_expr(lhs);
+        // lhs->reg0, rhs->reg1 fixme!
+        gen_binary(lhs, rhs, reg0) {
+          const reg1 = this.get_reg();
+          if (reg1 >= 0) {
+            this.gen_expr(rhs, reg1);
+            // this.push(reg1);
+            this.gen_expr(lhs, reg0);
+            // this.pop(reg1);
+            return reg1;
+          }
+
+          // use stack
+          this.gen_expr(rhs, reg0);
+          this.push(reg0);
+          this.gen_expr(lhs, reg0);
           this.pop(A1);
+          return A1;
         }
 
-        gen_switch(nd) {
-          this.gen_expr(nd.data.cond);
+        gen_switch(nd, reg) {
+          this.gen_expr(nd.data.cond, reg);
           this.case_start_ip = new SymbolTable(this.case_start_ip);
+          const reg1 = this.get_reg();
           for (let c of nd.data.cases) {
-            this.gen_inst(Op.ORI, A1, ZERO, None, c.val);
+            this.gen_inst(Op.ORI, reg1, ZERO, None, c.val);
             this.case_start_ip.define(c.label, this.ip);
-            this.gen_inst(Op.BEQ, A0, A1, None, None, c.label);
+            this.gen_inst(Op.BEQ, reg, reg1, None, None, c.label);
           }
 
           if (nd.data.case_default != None) {
@@ -4043,7 +4414,8 @@
           const break_ip = this.ip;
           this.gen_inst(Op.B, None, None, None, None, nd.data.break_label);
 
-          this.gen_stmt(nd.data.then);
+          this.free_reg(reg1);
+          this.gen_stmt(nd.data.then, reg);
 
           this.case_start_ip = this.case_start_ip.out;
 
@@ -4057,21 +4429,21 @@
           this.gen_label(nd.data.break_label);
         }
 
-        gen_case(nd) {
+        gen_case(nd, reg) {
           const start_ip = this.case_start_ip.resolve_local(nd.data.label);
           if (start_ip == None)
             throw new Error(error_token(nd.loc, "unreachable"));
           this.insts[start_ip].set_any(this.ip - start_ip);
           this.gen_label(nd.data.label);
-          this.gen_stmt(nd.data.body);
+          this.gen_stmt(nd.data.body, reg);
         }
 
-        gen_conditional(nd) {
+        gen_conditional(nd, reg) {
           const lbelse = uniq_str(".L.else");
-          const bip = this.gen_cond_jmp(nd.data[0], lbelse);
+          const bip = this.gen_cond_jmp(nd.data[0], lbelse, reg);
 
           // then
-          this.gen_expr(nd.data[1]);
+          this.gen_expr(nd.data[1], reg);
           const after_then_ip = this.ip;
           const lbend = uniq_str(".L.end");
           this.gen_inst(Op.B, None, None, None, 0, lbend);
@@ -4079,15 +4451,16 @@
           // else
           this.insts[bip].set_any(this.ip - bip - 1);
           this.gen_label(lbelse);
-          this.gen_expr(nd.data[2]);
+
+          this.gen_expr(nd.data[2], reg);
 
           // end
           this.insts[after_then_ip].set_any(this.ip - after_then_ip);
           this.gen_label(lbend);
         }
 
-        gen_for(nd) {
-          this.gen_stmt(nd.data.init);
+        gen_for(nd, reg) {
+          this.gen_stmt(nd.data.init, reg);
 
           const lbstart = nd.data.continue_label;
           const loop_start_ip = this.ip;
@@ -4097,15 +4470,15 @@
           const lbend = nd.data.break_label;
           let bip;
           if (nd.data.cond != None) {
-            bip = this.gen_cond_jmp(nd.data.cond, lbend);
+            bip = this.gen_cond_jmp(nd.data.cond, lbend, reg);
           }
 
           // body
-          this.gen_stmt(nd.data.body);
+          this.gen_stmt(nd.data.body, reg);
 
           // incr
           if (nd.data.incr != None) {
-            this.gen_expr(nd.data.incr);
+            this.gen_expr(nd.data.incr, reg);
           }
 
           // jump to start
@@ -4139,12 +4512,12 @@
           }
         }
 
-        gen_if(nd) {
+        gen_if(nd, reg) {
           const lbelse = uniq_str(".L.else");
-          const bip = this.gen_cond_jmp(nd.data.cond, lbelse);
+          const bip = this.gen_cond_jmp(nd.data.cond, lbelse, reg);
 
           // then
-          this.gen_stmt(nd.data.then);
+          this.gen_stmt(nd.data.then, reg);
           const after_then_ip = this.ip;
           const lbend = uniq_str(".L.end");
           this.gen_inst(Op.B, None, None, None, 0, lbend);
@@ -4153,7 +4526,7 @@
           this.insts[bip].set_any(this.ip - bip - 1);
           this.gen_label(lbelse);
           if (nd.data.els != None) {
-            this.gen_stmt(nd.data.els);
+            this.gen_stmt(nd.data.els, reg);
           }
 
           // end
@@ -4161,26 +4534,29 @@
           this.gen_label(lbend);
         }
 
-        gen_logand(nd) {
-          this.gen_expr(nd.data[0]);
+        gen_logand(nd, reg) {
+          this.gen_expr(nd.data[0], reg);
           const beqz_ip = this.ip;
           const jlabel = uniq_str();
-          this.gen_inst(Op.BEQZ, None, A0, None, 0, jlabel);
+          this.gen_inst(Op.BEQZ, None, reg, None, 0, jlabel);
 
-          // GR[A0] != 0
-          this.gen_expr(nd.data[1]);
+          // GR[reg] != 0
+          this.gen_expr(nd.data[1], reg);
+
           this.insts[beqz_ip].set_any(this.ip - beqz_ip - 1);
           this.gen_label(jlabel);
+          return;
         }
 
-        gen_logor(nd) {
-          this.gen_expr(nd.data[0]);
+        gen_logor(nd, reg) {
+          this.gen_expr(nd.data[0], reg);
           const bnez_ip = this.ip;
           const jlabel = uniq_str();
-          this.gen_inst(Op.BNEZ, None, A0, None, 0, jlabel);
+          this.gen_inst(Op.BNEZ, None, reg, None, 0, jlabel);
 
-          // GR[A0] == 0
-          this.gen_expr(nd.data[1]);
+          // GR[reg] == 0
+          this.gen_expr(nd.data[1], reg);
+
           this.insts[bnez_ip].set_any(this.ip - bnez_ip - 1);
           this.gen_label(jlabel);
         }
@@ -4189,20 +4565,25 @@
           this.gen_inst(Op.LABEL, None, None, None, None, String(`${lstr}:`));
         }
 
-        gen_neq(nd) {
-          this.gen_binary(nd.data[0], nd.data[1]);
-          this.gen_inst(Op.XOR, A0, A0, A1, None);
+        gen_neq(nd, reg) {
+          const reg1 = this.gen_binary(nd.data[0], nd.data[1], reg);
+          this.gen_inst(Op.XOR, reg, reg, reg1, None);
+          this.free_reg(reg1);
         }
 
-        gen_lt(lhs, rhs) {
-          this.gen_binary(lhs, rhs);
-          this.gen_inst(Op.SLT, A0, A0, A1, None);
+        gen_lt(lhs, rhs, reg) {
+          const reg1 = this.gen_binary(lhs, rhs, reg);
+          this.gen_inst(Op.SLT, reg, reg, reg1, None);
+          this.free_reg(reg1);
         }
 
-        gen_int(nd) {
+        gen_int(nd, reg) {
           // 8 bits
-          if (nd.type.kind == TypeKind.TY_CHAR || nd.data < 2 ** 11) {
-            this.gen_inst(Op.ORI, A0, ZERO, None, nd.data);
+          if (
+            nd.type.kind == TypeKind.TY_CHAR ||
+            (0 < nd.data && nd.data < 2 ** 11)
+          ) {
+            this.gen_inst(Op.ORI, reg, ZERO, None, nd.data);
             return;
           }
 
@@ -4210,23 +4591,29 @@
           if (nd.type.kind == TypeKind.TY_LONG) {
             this.gen_inst(
               Op.LU12I_W,
-              A0,
+              reg,
               None,
               None,
               int64_le_exact(nd.data, 31, 12),
             );
-            this.gen_inst(Op.ORI, A0, A0, None, int64_le_exact(nd.data, 11, 0));
+            this.gen_inst(
+              Op.ORI,
+              reg,
+              reg,
+              None,
+              int64_le_exact(nd.data, 11, 0),
+            );
             this.gen_inst(
               Op.LU32I_D,
-              A0,
+              reg,
               None,
               None,
               int64_le_exact(nd.data, 51, 32),
             );
             this.gen_inst(
               Op.LU52I_D,
-              A0,
-              A0,
+              reg,
+              reg,
               None,
               int64_le_exact(nd.data, 63, 52),
             );
@@ -4236,84 +4623,182 @@
           // 32 bits
           this.gen_inst(
             Op.LU12I_W,
-            A0,
+            reg,
             None,
             None,
             int64_le_exact(nd.data, 31, 12),
           );
-          this.gen_inst(Op.ORI, A0, A0, None, int64_le_exact(nd.data, 11, 0));
+          this.gen_inst(Op.ORI, reg, reg, None, int64_le_exact(nd.data, 11, 0));
+          return;
         }
 
-        gen_shr(nd) {
+        gen_shr(nd, reg) {
           // todo! cast type
-          this.gen_binary(nd.data[0], nd.data[1]);
-          this.gen_inst(Op.SRA_D, A0, A0, A1);
+          const reg1 = this.gen_binary(nd.data[0], nd.data[1], reg);
+          this.gen_inst(Op.SRA_D, reg, reg, reg1);
+          this.free_reg(reg1);
         }
 
-        gen_shl(nd) {
+        gen_shl(nd, reg) {
           // todo! cast type
-          this.gen_binary(nd.data[0], nd.data[1]);
-          this.gen_inst(Op.SLL_D, A0, A0, A1);
+          const reg1 = this.gen_binary(nd.data[0], nd.data[1], reg);
+          this.gen_inst(Op.SLL_D, reg, reg, reg1);
+          this.free_reg(reg1);
         }
 
-        gen_bitand(nd) {
-          this.gen_binary(nd.data[0], nd.data[1]);
-          this.gen_inst(Op.AND, A0, A0, A1);
+        gen_bitand(nd, reg) {
+          const reg1 = this.gen_binary(nd.data[0], nd.data[1], reg);
+          this.gen_inst(Op.AND, reg, reg, reg1);
+          this.free_reg(reg1);
         }
 
-        gen_bitxor(nd) {
-          this.gen_binary(nd.data[0], nd.data[1]);
-          this.gen_inst(Op.XOR, A0, A0, A1);
+        gen_bitxor(nd, reg) {
+          const reg1 = this.gen_binary(nd.data[0], nd.data[1], reg);
+          this.gen_inst(Op.XOR, reg, reg, reg1);
+
+          this.free_reg(reg1);
         }
 
-        gen_bitor(nd) {
-          this.gen_binary(nd.data[0], nd.data[1]);
-          this.gen_inst(Op.OR, A0, A0, A1);
+        gen_bitor(nd, reg) {
+          const reg1 = this.gen_binary(nd.data[0], nd.data[1], reg);
+          this.gen_inst(Op.OR, reg, reg, reg1);
+          this.free_reg(reg1);
         }
 
-        gen_add(nd) {
-          this.gen_binary(nd.data[0], nd.data[1]);
+        gen_add(nd, reg) {
+          const reg1 = this.gen_binary(nd.data[0], nd.data[1], reg);
           if (nd.type.kind == TypeKind.TY_INT) {
-            this.gen_inst(Op.ADD_W, A0, A0, A1, None);
-            return;
+            this.gen_inst(Op.ADD_W, reg, reg, reg1, None);
+          } else {
+            this.gen_inst(Op.ADD_D, reg, reg, reg1, None);
           }
-          this.gen_inst(Op.ADD_D, A0, A0, A1, None);
+          this.free_reg(reg1);
         }
 
-        gen_sub(nd) {
-          this.gen_binary(nd.data[0], nd.data[1]);
+        gen_sub(nd, reg) {
+          const reg1 = this.gen_binary(nd.data[0], nd.data[1], reg);
           if (nd.type.kind == TypeKind.TY_INT) {
-            this.gen_inst(Op.SUB_W, A0, A0, A1, None);
-            return;
+            this.gen_inst(Op.SUB_W, reg, reg, reg1, None);
+          } else {
+            this.gen_inst(Op.SUB_D, reg, reg, reg1, None);
           }
-          this.gen_inst(Op.SUB_D, A0, A0, A1, None);
+
+          this.free_reg(reg1);
         }
 
-        gen_mul(nd) {
-          this.gen_binary(nd.data[0], nd.data[1]);
+        gen_mul(nd, reg) {
+          const reg1 = this.gen_binary(nd.data[0], nd.data[1], reg);
           if (nd.type.kind == TypeKind.TY_INT) {
-            this.gen_inst(Op.MUL_W, A0, A0, A1, None);
-            return;
+            this.gen_inst(Op.MUL_W, reg, reg, reg1, None);
+          } else {
+            this.gen_inst(Op.MUL_D, reg, reg, reg1, None);
           }
-          this.gen_inst(Op.MUL_D, A0, A1, A0, None);
+
+          this.free_reg(reg1);
         }
 
-        gen_div(nd) {
-          this.gen_binary(nd.data[0], nd.data[1]);
+        gen_div(nd, reg) {
+          const reg1 = this.gen_binary(nd.data[0], nd.data[1], reg);
           if (nd.type.kind == TypeKind.TY_INT) {
-            this.gen_inst(Op.DIV_W, A0, A0, A1, None);
-            return;
+            this.gen_inst(Op.DIV_W, reg, reg, reg1, None);
+          } else {
+            this.gen_inst(Op.DIV_D, reg, reg, reg1, None);
           }
-          this.gen_inst(Op.DIV_D, A0, A0, A1, None);
+          this.free_reg(reg1);
         }
 
-        gen_mod(nd) {
-          this.gen_binary(nd.data[0], nd.data[1]);
+        gen_mod(nd, reg) {
+          const reg1 = this.gen_binary(nd.data[0], nd.data[1], reg);
           if (nd.type.kind == TypeKind.TY_INT) {
-            this.gen_inst(Op.MOD_W, A0, A0, A1, None);
-            return;
+            this.gen_inst(Op.MOD_W, reg, reg, reg1, None);
+          } else {
+            this.gen_inst(Op.MOD_D, reg, reg, reg1, None);
           }
-          this.gen_inst(Op.MOD_D, A0, A0, A1, None);
+          this.free_reg(reg1);
+        }
+
+        gen_cast(from, to, reg) {
+          const [I8, I16, I32, I64, U8, U16, U32, U64] = [
+            0, 1, 2, 3, 4, 5, 6, 7,
+          ];
+          const get_type_id = (ty) => {
+            switch (ty.kind) {
+              case TypeKind.TY_CHAR:
+                if (ty.is_unsigned) {
+                  return U8;
+                }
+                return I8;
+              case TypeKind.TY_SHORT:
+                if (ty.is_unsigned) {
+                  return U16;
+                }
+                return I16;
+              case TypeKind.TY_INT:
+                if (ty.is_unsigned) {
+                  return U32;
+                }
+                return I32;
+              case TypeKind.TY_LONG:
+                if (ty.is_unsigned) {
+                  return U64;
+                }
+                return I64;
+
+              default:
+                return I64;
+            }
+          };
+
+          const i64i8 = () => {
+            this.gen_inst(Op.EXT_W_B, reg, reg);
+          };
+          const i64i16 = () => {
+            this.gen_inst(Op.EXT_W_H, reg, reg);
+          };
+          const i64i32 = () => {
+            this.gen_inst(Op.BYTEPICK_W, reg, reg, ZERO, 4);
+          };
+          const i64u8 = () => {
+            this.gen_inst(Op.BSTRPICK_D, reg, reg, 7, 0);
+          };
+          const i64u16 = () => {
+            this.gen_inst(Op.BSTRPICK_D, reg, reg, 15, 0);
+          };
+          const i64u32 = () => {
+            this.gen_inst(Op.BSTRPICK_D, reg, reg, 31, 0);
+          };
+
+          // deno-format off
+          const cast_fn_table = [
+            // i8   i16     i32     i64      u8     u16     u32     u64
+            [null, i64u8, i64u8, i64u8, i64u8, i64u8, i64u8, null], // i8
+            [i64i8, null, null, null, i64u8, i64u16, i64u16, null], // i16
+            [i64i8, i64i16, null, null, i64u8, i64u16, null, null], // i32
+            [i64i8, i64i16, i64i32, null, i64u8, i64u16, null, null], // i64
+            [i64i8, null, null, null, null, null, null, null], // u8
+            [i64i8, i64i16, null, null, i64u8, null, null, null], // u16
+            [i64i8, i64i16, null, null, i64u8, i64u16, null, null], // u32
+            [i64i8, i64i16, null, null, i64u8, i64u16, null, null], // u64
+          ];
+          // deno-format on
+
+          const cast = (from, to, reg) => {
+            if (to.kind == TypeKind.TY_VOID) {
+              return;
+            }
+
+            if (to.kind == TypeKind.TY_BOOL) {
+              this.gen_inst(Op.SLTU, reg, ZERO, reg, 0);
+              return;
+            }
+
+            const fromid = get_type_id(from);
+            const toid = get_type_id(to);
+            const f = cast_fn_table[fromid][toid];
+            if (f) f();
+          };
+
+          cast(from, to, reg);
         }
 
         gen_inst(op, d, j, k, any, label, incr = INS_SIZE) {
@@ -4321,14 +4806,31 @@
           this.ip += incr;
         }
 
-        push() {
+        push(r = A0) {
           this.gen_inst(Op.ADDI_D, SP, SP, None, -8, None);
-          this.gen_inst(Op.ST_D, A0, SP, None, 0, None);
+          this.gen_inst(Op.ST_D, r, SP, None, 0, None);
         }
 
         pop(reg) {
           this.gen_inst(Op.LD_D, reg, SP, None, 0, None);
           this.gen_inst(Op.ADDI_D, SP, SP, None, 8, None);
+        }
+
+        get_reg() {
+          let reg = -1;
+          for (let i = 0; i < this.reg_used.length; i++) {
+            if (this.reg_used[i] == false) {
+              reg = i + 12;
+              this.reg_used[i] = true;
+              break;
+            }
+          }
+          return reg;
+        }
+
+        free_reg(reg) {
+          if (reg < 12) return;
+          this.reg_used[reg - 12] = false;
         }
       }
 
@@ -4442,21 +4944,16 @@
 
       class Mem {
         constructor(size) {
-          // this._mem = Array(size).fill(0);
           this._mem = Array(size);
           this.cap = size;
         }
 
-        set(data, addr, len) {
-          // this._mem[addr] = BigInt.asUintN(len, data);
+        set(data, addr) {
           this._mem[addr] = data;
         }
 
-        get(addr, len) {
-          const v = this._mem[addr];
-          // if (v == 0) return 0n;
-          // return BigInt.asUintN(len, v);
-          return v;
+        get(addr) {
+          return this._mem[addr];
         }
       }
 
@@ -4475,11 +4972,30 @@
         }
 
         store_mem(data, addr, len) {
-          this.mem.set(data, addr, len);
+          let curaddr = BigInt(addr);
+          let d = data;
+          let byte = 0;
+          for (let i = 0; i < len / BYTE; i++) {
+            byte = d & 0xffn;
+            this.mem.set(byte, curaddr);
+            d = d >> BigInt(BYTE);
+            curaddr += 1n;
+          }
+          // this.mem.set(data, addr, len);
         }
 
         load_mem(addr, len) {
-          return BigInt.asIntN(len, BigInt(this.mem.get(addr, len)));
+          let curaddr = BigInt(addr);
+          let data = 0n;
+          let byte = 0n;
+          for (let i = 0; i < len / BYTE; i++) {
+            byte = this.mem.get(curaddr);
+            if (byte == undefined) byte = 0;
+            data = data | (BigInt(byte) << BigInt(BYTE * i));
+            curaddr += 1n;
+          }
+          return BigInt.asIntN(len, data);
+          // return BigInt.asIntN(len, BigInt(this.mem.get(addr, len)));
         }
 
         read_code(insts) {
@@ -4499,7 +5015,9 @@
               const ps = ins.label();
               let data = ins.any();
               if (ps.name == ".space") data = 0;
-              this.mem.set(data, addr, ps.size);
+              if (ps.name != ".data") {
+                this.store_mem(BigInt(data), addr, ps.size * BYTE);
+              }
               addr += ps.size;
             } else {
               this.mem._mem[addr] = ins;
@@ -4540,7 +5058,15 @@
                 this.GR[FP]
               }, ra=${this.GR[RA]}, pc=${this.pc()}`,
             );
-            console.log(i.to_str());
+            // console.log(i.to_str());
+
+            try {
+              console.log(i.to_str());
+              // i.op();
+            } catch (e) {
+              console.log(i);
+              throw e;
+            }
           }
 
           if (i.op() == Op.LABEL || i.op() == Op.DOT_PSEUDO) return;
@@ -4818,7 +5344,7 @@
               break;
 
             case Op.OR:
-              this.GR[i.d()] = this.GR[i.j()] | this.GR[i.k()];
+              this.GR[i.d()] = BigInt(this.GR[i.j()]) | BigInt(this.GR[i.k()]);
               break;
 
             case Op.BEQZ:
@@ -4961,7 +5487,9 @@
             }
 
             case Op.BYTEPICK_W: {
-              let tmp = (this.GR[i.k()] << 32) | (this.GR[i.j()] & 0xffffffff);
+              let tmp =
+                (BigInt(this.GR[i.k()]) << 32n) |
+                (BigInt(this.GR[i.j()]) & 0xffffffffn);
               this.GR[i.d()] = sign_extend(
                 int64_le_exact(tmp, 8 * (8 - i.any()) - 1, 8 * (4 - i.any())),
                 32,
