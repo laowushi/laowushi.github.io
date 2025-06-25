@@ -5567,16 +5567,6 @@
               break;
 
             // pcalau12i rd, si20 FIXME!
-            // 以下内容来自 AI: pcalau12i 内容可能有点胡说八道！
-            // pcalau12i $a0, %pc_hi20(sym)   // 计算 (sym - PC) 的高20位偏移
-            // addi.d    $a0, $a0, %pc_lo12(sym) // 补充低12位偏移
-            // %pc_hi20(sym) = ((sym - PC) >> 12) & 0xfffff
-            //rd = (pc + sign_extend(si20 * 65536)) & 0xffff_ffff_f000
-            // 即：将当前指令地址（PC）与符号扩展后的20位立即数左移16位（相当于乘以65536）相加，再取结果的高52位（低12位清零）。
-            // 另一个解释： rd = (PC[63:44] << 44) | (imm20 << 12)
-            // C值截断规则：手册要求取PC的高44位，但若PC未对齐可能导致意外结果。实践中需确保PC按32位对齐（如
-            // 0x80000000），否则需通过 pcaddu18i等指令调整。
-            // 又一个解释： rd = sign_extend( (PC >> 32) << 32 + (imm20 << 12) ) 注意：这里并非直接使用完整 PC 值，而是用 PC 的高 32 位（即当前地址的页基址）与偏移量组合，避免直接操作 64 位地址的复杂性。
             case Op.PCALAU12I:
               // const tmp = this.pc() + sign_extend(i.any() << 12, 32);
               // this.GR[i.d()] = tmp & (0xfffffffffffff000n);
@@ -5710,6 +5700,10 @@
             rows="40"
             placeholder="Input C source code here, then press 'ctrl enter' or click 'Run' to run."
           ></textarea>
+          <p>
+            example:<br />
+            int main(){ int x=512; *(char *)&x=1; return x; } => expect: 513.
+          </p>
         </div>
       </div>
 
