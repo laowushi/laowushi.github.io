@@ -25,6 +25,12 @@
         border: 1px solid #ccc;
         resize: both;
       }
+
+      #source-code {
+        position: absolute;
+        right: 10px;
+        <!-- width: 300px; -->
+      }
     </style>
 
     <title></title>
@@ -5709,6 +5715,9 @@
 
       <div class="textarea-container">
         <button id="copyasmbtn" onclick="copy_asm()">Copy</button>
+        <a id="source-code" href="https://gitee.com/ddaren/jscc" target="_blank"
+          >source code</a
+        >
         <br />
         <textarea
           id="resultarea"
