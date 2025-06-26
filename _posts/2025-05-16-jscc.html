@@ -120,6 +120,7 @@
         static TK_KW_ENUM = Symbol("TK_KW_ENUM"); // "enum"
         static TK_KW_SIGNED = Symbol("TK_KW_SIGNED"); // "signed"
         static TK_KW_UNSIGNED = Symbol("TK_KW_UNSIGNED"); // "unsigned"
+        static TK_KW_BOOL = Symbol("TK_KW_BOOL"); // "_Bool"
         static TK_IDENT = Symbol("TK_IDENT");
         static TK_STR = Symbol("TK_STR");
         static TK_PLUS = Symbol("+");
@@ -763,6 +764,7 @@
           ["enum", TokenKind.TK_KW_ENUM],
           ["signed", TokenKind.TK_KW_SIGNED],
           ["unsigned", TokenKind.TK_KW_UNSIGNED],
+          ["_Bool", TokenKind.TK_KW_BOOL],
         ]);
 
         let k = kws.get(ident);
@@ -784,6 +786,7 @@
         static TY_ARRAY = Symbol("TY_ARRAY");
         static TY_STRUCT = Symbol("TY_STRUCT");
         static TY_UNION = Symbol("TY_UNION");
+        static TY_BOOL = Symbol("TY_BOOL");
       }
 
       class Type {
@@ -889,7 +892,9 @@
           if (
             this.kind == TypeKind.TY_INT ||
             this.kind == TypeKind.TY_LONG ||
-            this.kind == TypeKind.TY_CHAR
+            this.kind == TypeKind.TY_CHAR ||
+            this.kind == TypeKind.TY_SHORT ||
+            this.kind == TypeKind.TY_BOOL
           )
             return true;
 
@@ -924,6 +929,7 @@
       const char_ty = new Type(TypeKind.TY_CHAR, 1, 1);
       const uchar_ty = new Type(TypeKind.TY_CHAR, 1, 1, None, None, true);
       const void_ty = new Type(TypeKind.TY_VOID, 1, 1);
+      const bool_ty = new Type(TypeKind.TY_BOOL, 1, 1);
 
       function common_type(lhsty, rhsty) {
         return lhsty.size >= rhsty.size ? lhsty : rhsty;
@@ -997,7 +1003,7 @@
       }
 
       function new_cast_node(ty, nd, loc) {
-        return new Node(NodeKind.ND_CAST, nd, loc, ty);
+        return new Node(NodeKind.ND_CAST, nd, loc, ty.clone());
       }
 
       class SymbolTable {
@@ -1543,11 +1549,11 @@
             this.advance();
             nd = None;
           } else {
-            nd = new_cast_node(
-              this.current_func.type.func.ret_ty,
-              this.expr(),
-              loc,
-            );
+            nd = this.expr();
+            const fretty = this.current_func.type.func.ret_ty;
+            if (fretty != TypeKind.TY_STRUCT && fretty != TypeKind.TY_UNION) {
+              nd = new_cast_node(fretty, nd, loc);
+            }
             this.skip(TokenKind.TK_SEMICOLON);
           }
 
@@ -1733,6 +1739,7 @@
         is_typename(name) {
           switch (name.kind) {
             case TokenKind.TK_KW_VOID:
+            case TokenKind.TK_KW_BOOL:
             case TokenKind.TK_KW_CHAR:
             case TokenKind.TK_KW_SHORT:
             case TokenKind.TK_KW_INT:
@@ -1806,7 +1813,12 @@
         resolve_var(name) {
           const v = this.var_table.resolve(name.val);
           if (v == None) {
-            throw new Error(error_token(name, String(`undefined ${name.val}`)));
+            throw new Error(
+              error_token(
+                name,
+                String(`undefined <${name.kind.toString()}, ${name.val}>`),
+              ),
+            );
           }
           return v;
         }
@@ -2071,6 +2083,12 @@
             b = true;
 
             let ty = this.declarator(basety);
+            if (ty.kind == TypeKind.TY_VOID) {
+              throw new Error(
+                error_token(this.curtok, "variable declared void"),
+              );
+            }
+
             let id = this.define_var(
               ty.name,
               this.new_lvar_node(ty.name, ty, var_attr),
@@ -2091,10 +2109,17 @@
         }
 
         func_param(ty) {
-          this.advance();
+          this.advance(); // skip '('
           var params = [];
           while (this.curtok.kind != TokenKind.TK_RPAREN) {
-            params.push(this.declarator(this.decl_spec()));
+            const ty = this.abstract_declarator(this.decl_spec());
+            if (ty.kind == TypeKind.TY_VOID) {
+              if (ty.name != None) {
+                throw new Error(error_token(ty.name, "param declared void"));
+              }
+              break;
+            }
+            params.push(ty);
             if (this.curtok.kind == TokenKind.TK_COMMA) this.advance();
           }
 
@@ -2184,10 +2209,11 @@
         // return type
         decl_spec(attr) {
           const VOID = 1 << 0;
-          const CHAR = 1 << 2;
-          const SHORT = 1 << 4;
-          const INT = 1 << 6;
-          const LONG = 1 << 8;
+          const BOOL = 1 << 2;
+          const CHAR = 1 << 4;
+          const SHORT = 1 << 6;
+          const INT = 1 << 8;
+          const LONG = 1 << 10;
           const SIGNED = 1 << 17;
           const UNSIGNED = 1 << 18;
 
@@ -2195,7 +2221,13 @@
           var tycnt = 0;
           while (true) {
             if (this.curtok.kind == TokenKind.TK_KW_VOID) {
-              tycnt += VOID;
+              tycnt = VOID;
+              this.advance();
+              continue;
+            }
+
+            if (this.curtok.kind == TokenKind.TK_KW_BOOL) {
+              tycnt = BOOL;
               this.advance();
               continue;
             }
@@ -2242,6 +2274,8 @@
           switch (tycnt) {
             case VOID:
               return void_ty;
+            case BOOL:
+              return bool_ty;
             case CHAR:
             case SIGNED + CHAR:
               return char_ty;
@@ -2901,7 +2935,7 @@
             this.advance();
             const ty = this.abstract_declarator(this.decl_spec());
             this.skip(TokenKind.TK_RPAREN);
-            return new Node(NodeKind.ND_CAST, this.cast(), loc, ty);
+            return new_cast_node(ty, this.cast(), loc);
           }
 
           return this.unary();
@@ -2913,6 +2947,13 @@
             let loc = this.curtok;
             this.advance();
             let nd = this.cast();
+            if (nd.type.base == None) {
+              throw new Error(error_token(loc, "invalid pointer dereference"));
+            }
+            if (nd.type.base.kind == TypeKind.TY_VOID) {
+              throw new Error(error_token(loc, "dereferencing a void pointer"));
+            }
+
             return new Node(NodeKind.ND_DEREF, nd, loc, nd.type.base);
           }
 
@@ -3162,15 +3203,38 @@
               ),
             );
           }
-          this.advance();
-          this.advance();
+          this.advance(); // skip func name
+          this.advance(); // skip '('
 
+          const fpatys = f.type.func.param;
+          let paty;
+          let patyi = 0;
           let arg = [];
           let b = false;
+          let a;
+          // todo! type cast
           while (this.curtok.kind != TokenKind.TK_RPAREN) {
             if (b) this.skip(TokenKind.TK_COMMA);
             b = true;
-            arg.push(this.expr());
+            a = this.expr();
+            paty = fpatys[patyi];
+            if (paty != undefined) {
+              if (
+                paty.kind == TypeKind.TY_STRUCT ||
+                paty.kind == TypeKind.TY_UNION
+              ) {
+                throw new Error(
+                  error_token(
+                    a.loc,
+                    "passing struct or union is not supported",
+                  ),
+                );
+              }
+              a = new_cast_node(paty, a, a.loc);
+              patyi += 1;
+            }
+
+            arg.push(a);
           }
           this.skip(TokenKind.TK_RPAREN);
 
@@ -4142,7 +4206,6 @@
 
           if (reg != A0) {
             this.gen_inst(Op.OR, reg, A0, ZERO);
-            this.free_reg(A0);
           }
         }
 
@@ -4198,36 +4261,30 @@
         gen_assign(nd, reg) {
           const lhs = nd.data[0];
           const rhs = nd.data[1];
-          switch (lhs.kind) {
-            case NodeKind.ND_VAR:
-              this.gen_expr(rhs, reg);
-              if (lhs.data.is_global) {
-                const reg1 = this.get_reg();
-                this.gen_gvar_addr(lhs, reg1);
-                this.gen_store(lhs.type, reg, reg1, 0, nd.loc);
-                this.free_reg(reg1);
-                return;
-              }
-
-              // local var
-              this.gen_store(lhs.type, reg, FP, lhs.data.offset, nd.loc);
-              return;
-
-            default:
-              this.gen_expr(rhs, reg);
-              const reg3 = this.get_reg();
-              this.gen_addr(lhs, reg3);
-              // this.push();
-              // this.pop(A1);
-              this.gen_store(lhs.type, reg, reg3, 0, nd.loc);
-              this.free_reg(reg3);
-              return;
+          const reg3 = this.get_reg();
+          if (reg3 < 0) {
+            this.gen_addr(lhs, reg);
+            this.push(reg);
+            this.gen_expr(rhs, reg);
+            this.pop(A1);
+            this.gen_store(lhs.type, reg, A1, 0, nd.loc);
+            return;
           }
+
+          this.gen_expr(rhs, reg);
+          this.gen_addr(lhs, reg3);
+          this.gen_store(lhs.type, reg, reg3, 0, nd.loc);
+          this.free_reg(reg3);
         }
 
         // Load a value to `d` from where `j` is pointing to.
         gen_load(type, d, j, i, loc) {
-          if (type.kind == TypeKind.TY_ARRAY) return;
+          if (
+            type.kind == TypeKind.TY_ARRAY ||
+            type.kind == TypeKind.TY_STRUCT ||
+            type.kind == TypeKind.TY_UNION
+          )
+            return;
 
           switch (type.size) {
             case 1:
@@ -4236,6 +4293,13 @@
                 return;
               }
               this.gen_inst(Op.LD_B, d, j, None, i);
+              return;
+            case 2:
+              if (type.is_unsigned) {
+                this.gen_inst(Op.LD_HU, d, j, None, i);
+                return;
+              }
+              this.gen_inst(Op.LD_H, d, j, None, i);
               return;
             case 4:
               if (type.is_unsigned) {
@@ -4257,9 +4321,26 @@
           let msg = error_token(loc, `can not store`);
           if (type.kind == TypeKind.TY_ARRAY) throw new Error(msg);
 
+          if (
+            type.kind == TypeKind.TY_STRUCT ||
+            type.kind == TypeKind.TY_UNION
+          ) {
+            const r = this.get_reg();
+            if (r < 0) throw new Error("unreachable");
+            for (let i = 0; i < type.size; i++) {
+              this.gen_inst(Op.LD_B, r, d, None, i);
+              this.gen_inst(Op.ST_B, r, j, None, i);
+            }
+            this.free_reg(r);
+            return;
+          }
+
           switch (type.size) {
             case 1:
               this.gen_inst(Op.ST_B, d, j, None, i);
+              return;
+            case 2:
+              this.gen_inst(Op.ST_H, d, j, None, i);
               return;
             case 4:
               this.gen_inst(Op.ST_W, d, j, None, i);
@@ -4388,9 +4469,7 @@
           const reg1 = this.get_reg();
           if (reg1 >= 0) {
             this.gen_expr(rhs, reg1);
-            // this.push(reg1);
             this.gen_expr(lhs, reg0);
-            // this.pop(reg1);
             return reg1;
           }
 
@@ -4587,7 +4666,7 @@
           // 8 bits
           if (
             nd.type.kind == TypeKind.TY_CHAR ||
-            (0 < nd.data && nd.data < 2 ** 11)
+            (0 <= nd.data && nd.data < 2 ** 12)
           ) {
             this.gen_inst(Op.ORI, reg, ZERO, None, nd.data);
             return;
@@ -4794,7 +4873,7 @@
             }
 
             if (to.kind == TypeKind.TY_BOOL) {
-              this.gen_inst(Op.SLTU, reg, ZERO, reg, 0);
+              this.gen_inst(Op.SLTU, reg, ZERO, reg);
               return;
             }
 
@@ -5338,7 +5417,11 @@
             }
 
             case Op.SLTU:
-              this.GR[i.d()] = this.GR[i.j()] < this.GR[i.k()] ? 1 : 0;
+              this.GR[i.d()] =
+                BigInt.asUintN(64, this.GR[i.j()]) <
+                BigInt.asUintN(64, this.GR[i.k()])
+                  ? 1
+                  : 0;
               break;
 
             case Op.SLT:
@@ -5573,6 +5656,16 @@
               break;
 
             // pcalau12i rd, si20 FIXME!
+            // 以下内容来自 AI: pcalau12i 内容可能有点胡说八道！
+            // pcalau12i $a0, %pc_hi20(sym)   // 计算 (sym - PC) 的高20位偏移
+            // addi.d    $a0, $a0, %pc_lo12(sym) // 补充低12位偏移
+            // %pc_hi20(sym) = ((sym - PC) >> 12) & 0xfffff
+            //rd = (pc + sign_extend(si20 * 65536)) & 0xffff_ffff_f000
+            // 即：将当前指令地址（PC）与符号扩展后的20位立即数左移16位（相当于乘以65536）相加，再取结果的高52位（低12位清零）。
+            // 另一个解释： rd = (PC[63:44] << 44) | (imm20 << 12)
+            // C值截断规则：手册要求取PC的高44位，但若PC未对齐可能导致意外结果。实践中需确保PC按32位对齐（如
+            // 0x80000000），否则需通过 pcaddu18i等指令调整。
+            // 又一个解释： rd = sign_extend( (PC >> 32) << 32 + (imm20 << 12) ) 注意：这里并非直接使用完整 PC 值，而是用 PC 的高 32 位（即当前地址的页基址）与偏移量组合，避免直接操作 64 位地址的复杂性。
             case Op.PCALAU12I:
               // const tmp = this.pc() + sign_extend(i.any() << 12, 32);
               // this.GR[i.d()] = tmp & (0xfffffffffffff000n);
